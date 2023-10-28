@@ -37,6 +37,23 @@ class Torrent:
         return result
 
 
+    def chunks(self, chunk_size: int = 2 ** 14) -> Iterator[ChunkId]:
+        chunk_size = min(chunk_size, self.piece_size)
+        for i in range(self.piece_count):
+            if i < self.piece_count - 1:
+                piece_size = self.piece_size
+            else:
+                piece_size = self.file_size - self.piece_size * (self.piece_count - 1)
+
+            q = piece_size // chunk_size
+            r = piece_size % chunk_size
+            for j in range(q):
+                yield ChunkId(i, j * chunk_size, chunk_size)
+            
+            if r > 0:
+                yield ChunkId(i, q * chunk_size, r)
+
+
     @cached_property
     def trackers(self) -> list[str]:
         if Torrent._TRACKER_LIST in self._decoded:
@@ -82,23 +99,6 @@ class Torrent:
     @cached_property
     def piece_size(self) -> int:
         return int(self._decoded[Torrent._INFO][Torrent._PIECE_BYTES])
-
-
-    def chunks(self, chunk_size: int = 2 ** 14) -> Iterator[ChunkId]:
-        chunk_size = min(chunk_size, self.piece_size)
-        for i in range(self.piece_count):
-            if i < self.piece_count - 1:
-                piece_size = self.piece_size
-            else:
-                piece_size = self.file_size - self.piece_size * (self.piece_count - 1)
-
-            q = piece_size // chunk_size
-            r = piece_size % chunk_size
-            for j in range(q):
-                yield ChunkId(i, j * chunk_size, chunk_size)
-            
-            if r > 0:
-                yield ChunkId(i, q * chunk_size, r)
 
 
     @classmethod
