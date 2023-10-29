@@ -6,6 +6,7 @@ from typing import Optional
 from dataclasses import dataclass
 from client.ip import IpAndPort
 from client.torrent import Torrent
+from client.peer import PeerRequest, PeerResult, Peer
 
 
 @dataclass
@@ -160,31 +161,24 @@ class Client:
     def __init__(
         self,
         torrent: Torrent,
-        max_peers: int = 10,
-        ip: Optional[str] = None,
-        port: int = 0
+        max_peers: int = 10
     ):
         self.torrent = torrent
         self.max_peers = max_peers
-        self.listen_ip = ip
-        self.listen_port = port
         self.peer_id = random.randbytes(Client._PEER_ID_LENGTH)
         self.left = self.torrent.file_size
         self.downloaded = 0
 
 
-    def start(self):
+    def download(self, output_directory: str):
         tracker = random.choice(self.torrent.get_trackers('udp'))
         response = self._announce(tracker, _AnnounceRequest.EVENT_START)
         if not response:
             logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
             return
 
-        for peer in response.peers:
-            if peer.port == 0:
-                continue
-            if self._download_from_peer(peer):
-                break
+        valid_peers = [peer for peer in response.peers if peer.port != 0]
+        # download from peers
 
         response = self._announce(tracker, _AnnounceRequest.EVENT_STOP)
         if not response:
@@ -195,7 +189,7 @@ class Client:
     def _announce(self, tracker: IpAndPort, event: int) -> Optional[_AnnounceResponse]:
         logging.info(f'Announcing to {tracker.ip}:{tracker.port} ...')
 
-        self._new_transaction()
+        self.transaction_id = int.from_bytes(random.randbytes(4), 'big')
 
         # open socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -236,57 +230,3 @@ class Client:
             logging.error('Announce failed: %s', e)
             sock.close()
             return None
-
-
-    def _new_transaction(self):
-        self.transaction_id = int.from_bytes(random.randbytes(4), 'big')
-
-
-    def _connect_to_peer(self, peer: IpAndPort) -> Optional[socket.socket]:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(4)
-        try:
-            logging.info(f'Connecting to {peer.ip}:{peer.port} ...')
-            sock.connect((peer.ip, peer.port))
-            logging.info('Connected!')
-            if self._peer_handshake(sock):
-                logging.info('Handshake successful!')
-                return sock
-            logging.error('Handshake failed')
-        except socket.error as e:
-            logging.error('Connection failed: %s', e)
-        finally:
-            sock.close()
-            return None
-
-
-    def _download_from_peer(self, peer: IpAndPort) -> bool:
-        sock = self._connect_to_peer(peer)
-        if not sock:
-            return False
-
-        # download file
-        sock.close()
-        return True
-
-
-    def _peer_handshake(self, sock: socket.socket) -> bool:
-        header = struct.pack('!b', 19) + b'BitTorrent protocol'
-        handshake = header + struct.pack('!Q20s20s', 0, self.torrent.info_hash, self.peer_id)
-        logging.info('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.torrent.info_hash, self.peer_id))
-        sock.send(handshake)
-        data = sock.recv(len(header) + 48)
-        _header, _, _info_hash, _ = struct.unpack('!20sQ20s20s', data)
-        logging.info('Recv handshake: %s', data)
-        return (
-            _header == header and
-            _info_hash == self.torrent.info_hash
-        )
-
-
-    def _send_peer_message(self, sock: socket.socket, data: bytes):
-        sock.send(struct.pack('!I', len(data)) + data)
-
-
-    def _recv_peer_message(self, sock: socket.socket) -> bytes:
-        return sock.recv(struct.unpack('!I', sock.recv(4)))
