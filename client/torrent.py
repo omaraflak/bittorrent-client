@@ -16,13 +16,13 @@ class ChunkId:
 
 class Torrent:
     _SHA1_SIZE = 20
-    _TRACKER = "announce"
-    _TRACKER_LIST = "announce-list"
-    _INFO = "info"
-    _FILE_BYTES = "length"
-    _FILE_NAME = "name"
-    _FILE_PIECES = "pieces"
-    _PIECE_BYTES = "piece length"
+    _TRACKER = 'announce'
+    _TRACKER_LIST = 'announce-list'
+    _INFO = 'info'
+    _FILE_BYTES = 'length'
+    _FILE_NAME = 'name'
+    _FILE_PIECES = 'pieces'
+    _PIECE_BYTES = 'piece length'
 
 
     def __init__(self, data: bytes):

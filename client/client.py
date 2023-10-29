@@ -21,7 +21,7 @@ class _ConnectRequest:
         # 8       32-bit integer  action          0 // connect
         # 12      32-bit integer  transaction_id
         return struct.pack(
-            "!QII",
+            '!QII',
             _ConnectRequest._PROTOCOL_ID,
             _ConnectRequest._ACTION,
             self.transaction_id
@@ -40,7 +40,7 @@ class _ConnectResponse:
         # 0       32-bit integer  action          0 // connect
         # 4       32-bit integer  transaction_id
         # 8       64-bit integer  connection_id
-        action, transaction_id, connection_id = struct.unpack("!IIQ", data)
+        action, transaction_id, connection_id = struct.unpack('!IIQ', data)
         assert action == _ConnectRequest._ACTION
         return _ConnectResponse(transaction_id, connection_id)
 
@@ -87,7 +87,7 @@ class _AnnounceRequest:
         # 92      32-bit integer  num_want        -1 // default
         # 96      16-bit integer  port
         return struct.pack(
-            "!QII20s20sQQQIIIiH",
+            '!QII20s20sQQQIIIiH',
             self.connection_id,
             _AnnounceRequest._ACTION,
             self.transaction_id,
@@ -131,7 +131,7 @@ class _AnnounceResponse:
             leechers,
             seeders,
             *ips_and_ports
-        ) = struct.unpack("!IIIII" + peers_count * "IH", data)
+        ) = struct.unpack('!IIIII' + peers_count * 'IH', data)
         assert action == _AnnounceRequest._ACTION
         peers = [
             IpAndPort(
@@ -174,7 +174,7 @@ class Client:
 
 
     def start(self):
-        tracker = random.choice(self.torrent.get_trackers("udp"))
+        tracker = random.choice(self.torrent.get_trackers('udp'))
         response = self._announce(tracker, _AnnounceRequest.EVENT_START)
         if not response:
             logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
