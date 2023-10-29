@@ -174,7 +174,7 @@ class Client:
         self.listen_ip = ip
         self.listen_port = port
         self.peer_id = random.randbytes(Client._PEER_ID_LENGTH)
-        self.left = self.torrent.piece_count * self.torrent.piece_size # self.torrent.file_size
+        self.left = self.torrent.file_size
         self.downloaded = 0
 
 
