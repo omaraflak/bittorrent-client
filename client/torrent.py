@@ -79,7 +79,8 @@ class Torrent:
 
     @cached_property
     def file_size(self) -> int:
-        return int(self._decoded[Torrent._INFO][Torrent._FILE_BYTES])
+        computed_size = self.piece_size * self.piece_count
+        return int(self._decoded[Torrent._INFO].get(Torrent._FILE_BYTES, computed_size))
 
 
     @cached_property
