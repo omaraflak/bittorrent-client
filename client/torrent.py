@@ -8,16 +8,10 @@ from client.bencode import bencode, decode_bencode
 
 
 @dataclass
-class ChunkId:
-    start: int
-    length: int
-
-
-@dataclass
 class Piece:
     index: int
-    chunk_ids: list[ChunkId]
     piece_hash: bytes
+    max_piece_size: int
 
 
 class Torrent:
@@ -44,21 +38,14 @@ class Torrent:
         return result
 
 
-    def pieces(self, chunk_size: int = 2 ** 14) -> Iterator[Piece]:
-        chunk_size = min(chunk_size, self.piece_size)
+    def pieces(self) -> Iterator[Piece]:
         for i in range(self.piece_count):
             if i < self.piece_count - 1:
                 piece_size = self.piece_size
             else:
                 piece_size = self.file_size - self.piece_size * (self.piece_count - 1)
 
-            q = piece_size // chunk_size
-            r = piece_size % chunk_size
-            chunks = [ChunkId(j * chunk_size, chunk_size) for j in range(q)]
-            if r > 0:
-                chunks.append(ChunkId(q * chunk_size, r))
-
-            yield Piece(i, chunks, self.hash_pieces[i])
+            yield Piece(i, self.hash_pieces[i], piece_size)
 
 
     @cached_property

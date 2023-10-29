@@ -10,7 +10,7 @@ from typing import Optional, Callable
 from dataclasses import dataclass
 from client.ip import IpAndPort
 from client.torrent import Torrent, Piece
-from client.peer import PeerRequest, PeerResult, Peer
+from client.peer import PeerRequest, PeerResult, PeerError, Peer
 
 
 @dataclass
@@ -160,11 +160,12 @@ class _AnnounceResponse:
 
 class Client:
     _PEER_ID_LENGTH = 20
+    _MAX_PEERS = 150
 
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 1
+        max_workers: int = 50
     ):
         self.torrent = torrent
         self.max_workers = max_workers
@@ -180,21 +181,27 @@ class Client:
             logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
             return
 
-        self.lock = threading.Lock()
+
         self.available_peers = {peer for peer in response.peers if peer.port != 0}
         self.pieces_received: list[tuple[Piece, bytes]] = []
+
+        if not self.available_peers:
+            logging.error('Tracker did not return any valid peer')
+            return
+
+        self.lock = threading.Lock()
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for piece in self.torrent.pieces():
                 worker = Peer(lambda: self._get_peer_request(piece))
                 executor.submit(self._with_callback(worker.start, executor))
 
-        logging.info('Writing file ...')
+        logging.debug('Writing file ...')
         with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
             for _, data in sorted(self.pieces_received, key=lambda x: x[0].index):
                 file.write(data)
 
-        logging.info('File written to disk!')
+        logging.debug('File written to disk!')
 
         response = self._announce(tracker, _AnnounceRequest.EVENT_STOP)
         if not response:
@@ -204,7 +211,7 @@ class Client:
 
     def _get_peer_request(self, piece: Piece) -> PeerRequest:
         while not self.available_peers:
-            logging.info('No worker available, waiting 3 seconds ...')
+            logging.debug('No worker available, waiting 3 seconds ...')
             time.sleep(3)
 
         with self.lock:
@@ -217,17 +224,23 @@ class Client:
 
 
     def _on_peer_result(self, result: PeerResult, executor: ThreadPoolExecutor):
-        if result.error:
+        if result.error is not None:
+            logging.error('Task failed. Discarding peer.')
+            if result.error == PeerError.MISSING_DATA:
+                with self.lock:
+                    self.available_peers.add(result.request.peer)
+
             worker = Peer(lambda: self._get_peer_request(result.request.piece))
             executor.submit(self._with_callback(worker.start))
             return
 
         with self.lock:
+            logging.debug('Task completed. Pushing new task.')
             self.pieces_received.append((result.request.piece, result.data))
             self.available_peers.add(result.request.peer)
 
         progress = int(100 * len(self.pieces_received) / self.torrent.piece_count)
-        logging.info(f'{progress}% downloaded')
+        logging.info(f'Downloaded {self.pieces_received}/{self.torrent.piece_count} pieces ({progress}%).')
 
 
     def _with_callback(self, fun: Callable[[], PeerResult], executor: ThreadPoolExecutor) -> Callable[[], PeerResult]:
@@ -239,13 +252,13 @@ class Client:
 
 
     def _announce(self, tracker: IpAndPort, event: int) -> Optional[_AnnounceResponse]:
-        logging.info(f'Announcing to {tracker.ip}:{tracker.port} ...')
+        logging.debug(f'Announcing to {tracker.ip}:{tracker.port} ...')
 
         self.transaction_id = int.from_bytes(random.randbytes(4), 'big')
 
         # open socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(10)
+        sock.settimeout(3)
 
         try:
             # connect
@@ -268,13 +281,13 @@ class Client:
                 event
             )
             sock.sendto(announce_request.to_bytes(), (tracker.ip, tracker.port))
-            announce_response = _AnnounceResponse.from_bytes(sock.recv(_AnnounceResponse.size(self.max_workers)))
+            announce_response = _AnnounceResponse.from_bytes(sock.recv(_AnnounceResponse.size(Client._MAX_PEERS)))
             if self.transaction_id != announce_response.transaction_id:
                 logging.error('Tracker did not return the expected transaction id')
                 sock.close()
                 return None
 
-            logging.info('Announced to tracker successfully!')
+            logging.debug('Announced to tracker successfully!')
 
             sock.close()
             return announce_response
