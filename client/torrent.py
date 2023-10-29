@@ -9,9 +9,15 @@ from client.bencode import bencode, decode_bencode
 
 @dataclass
 class ChunkId:
-    index: int
     start: int
     length: int
+
+
+@dataclass
+class Piece:
+    index: int
+    chunk_ids: list[ChunkId]
+    piece_hash: bytes
 
 
 class Torrent:
@@ -38,7 +44,7 @@ class Torrent:
         return result
 
 
-    def chunks(self, chunk_size: int = 2 ** 14) -> Iterator[ChunkId]:
+    def pieces(self, chunk_size: int = 2 ** 14) -> Iterator[Piece]:
         chunk_size = min(chunk_size, self.piece_size)
         for i in range(self.piece_count):
             if i < self.piece_count - 1:
@@ -48,11 +54,11 @@ class Torrent:
 
             q = piece_size // chunk_size
             r = piece_size % chunk_size
-            for j in range(q):
-                yield ChunkId(i, j * chunk_size, chunk_size)
-            
+            chunks = [ChunkId(j * chunk_size, chunk_size) for j in range(q)]
             if r > 0:
-                yield ChunkId(i, q * chunk_size, r)
+                chunks.append(ChunkId(q * chunk_size, r))
+
+            yield Piece(i, chunks, self.hash_pieces[i])
 
 
     @cached_property

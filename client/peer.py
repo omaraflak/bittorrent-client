@@ -3,9 +3,9 @@ import logging
 import struct
 from enum import Enum
 from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Optional, Callable
 from client.ip import IpAndPort
-from client.torrent import ChunkId
+from client.torrent import Piece, ChunkId
 
 
 @dataclass
@@ -13,17 +13,13 @@ class PeerRequest:
     peer: IpAndPort
     info_hash: bytes
     peer_id: bytes
-    chunk_id: ChunkId
-
-
-@dataclass
-class PeerResult:
-    data: bytes
+    piece: Piece
 
 
 class PeerErrorType(Enum):
     CONNECTION = 1
     HANDSHAKE = 2
+    CORRUPTED = 3
 
 
 @dataclass
@@ -32,18 +28,30 @@ class PeerError:
     request: PeerRequest
 
 
+@dataclass
+class PeerResult:
+    request: PeerRequest
+    data: bytes
+    error: Optional[PeerError] = None
+
+
 class Peer:
-    def start(self, request: PeerRequest) -> Union[PeerResult, PeerError]:
+    def __init__(self, get_request: Callable[[], PeerRequest]):
+        self.get_request = get_request
+
+
+    def start(self) -> PeerResult:
+        request = self.get_request()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
-    
+
         error = self._connect(sock, request)
         if error:
-            return error
-        
+            return PeerResult(request, b'', error)
+
         # download
         sock.close()
-        return PeerResult(b'')
+        return PeerResult(request, b'')
 
 
     def _connect(self, sock: socket.socket, request: PeerRequest) -> Optional[PeerError]:
