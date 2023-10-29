@@ -4,13 +4,8 @@ import random
 import logging
 from typing import Optional
 from dataclasses import dataclass
+from client.ip import IpAndPort
 from client.torrent import Torrent
-
-
-@dataclass
-class IpAndPort:
-    ip: str
-    port: int
 
 
 @dataclass
@@ -179,10 +174,10 @@ class Client:
 
 
     def start(self):
-        tracker = random.choice(self.torrent.trackers_with_scheme("udp"))
+        tracker = random.choice(self.torrent.get_trackers("udp"))
         response = self._announce(tracker, _AnnounceRequest.EVENT_START)
         if not response:
-            logging.error(f'Failed to announce START to tracker {tracker[0]}:{tracker[1]}')
+            logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
             return
 
         for peer in response.peers:
@@ -193,12 +188,12 @@ class Client:
 
         response = self._announce(tracker, _AnnounceRequest.EVENT_STOP)
         if not response:
-            logging.error(f'Failed to announce STOP to tracker {tracker[0]}:{tracker[1]}')
+            logging.error(f'Failed to announce STOP to tracker {tracker.ip}:{tracker.port}')
             return
 
 
-    def _announce(self, tracker: tuple[str, int], event: int) -> Optional[_AnnounceResponse]:
-        logging.info(f'Announcing to {tracker[0]}:{tracker[1]} ...')
+    def _announce(self, tracker: IpAndPort, event: int) -> Optional[_AnnounceResponse]:
+        logging.info(f'Announcing to {tracker.ip}:{tracker.port} ...')
 
         self._new_transaction()
 
@@ -209,7 +204,7 @@ class Client:
         try:
             # connect
             connect_request = _ConnectRequest(self.transaction_id)
-            sock.sendto(connect_request.to_bytes(), tracker)
+            sock.sendto(connect_request.to_bytes(), (tracker.ip, tracker.port))
             connect_response = _ConnectResponse.from_bytes(sock.recv(_ConnectResponse.size()))
             if self.transaction_id != connect_response.transaction_id:
                 logging.error('Tracker did not return the expected transaction id')
@@ -226,7 +221,7 @@ class Client:
                 self.left,
                 event
             )
-            sock.sendto(announce_request.to_bytes(), tracker)
+            sock.sendto(announce_request.to_bytes(), (tracker.ip, tracker.port))
             announce_response = _AnnounceResponse.from_bytes(sock.recv(_AnnounceResponse.size(self.max_peers)))
             if self.transaction_id != announce_response.transaction_id:
                 logging.error('Tracker did not return the expected transaction id')

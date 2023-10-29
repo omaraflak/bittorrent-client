@@ -1,8 +1,9 @@
 import hashlib
-from dataclasses import dataclass
-from typing import Iterator
 from urllib.parse import urlparse
+from dataclasses import dataclass
+from typing import Iterator, Optional
 from functools import cached_property
+from client.ip import IpAndPort
 from client.bencode import bencode, decode_bencode
 
 
@@ -28,12 +29,12 @@ class Torrent:
         self._decoded = decode_bencode(data)
 
 
-    def trackers_with_scheme(self, scheme: str = 'udp') -> list[tuple[str, int]]:
+    def get_trackers(self, scheme: Optional[str] = 'udp') -> list[IpAndPort]:
         result: list[tuple[str, int]] = []
         for url in self.trackers:
             res = urlparse(url)
-            if res.scheme.lower() == scheme:
-                result.append((res.hostname, res.port))
+            if not scheme or scheme == res.scheme.lower():
+                result.append(IpAndPort(res.hostname, res.port))
         return result
 
 
@@ -106,4 +107,3 @@ class Torrent:
     def from_file(cls, filepath: str) -> 'Torrent':
         with open(filepath, 'rb') as file:
             return Torrent(file.read())
-
