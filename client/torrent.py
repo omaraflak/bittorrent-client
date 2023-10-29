@@ -32,7 +32,7 @@ class Torrent:
         result: list[tuple[str, int]] = []
         for url in self.trackers:
             res = urlparse(url)
-            if res.scheme.lower() == scheme.lower():
+            if res.scheme.lower() == scheme:
                 result.append((res.hostname, res.port))
         return result
 
