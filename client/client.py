@@ -180,6 +180,14 @@ class Client(PeerIO):
 
 
     def download(self, output_directory: str):
+        if not self._get_peers_from_trackers():
+            return
+        self._start_peer_workers()
+        self._write_file(output_directory)
+        self._announce_stop_to_trackers()
+
+
+    def _get_peers_from_trackers(self) -> bool:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures: list[tuple[Future[set[IpAndPort], IpAndPort]]] = []
             for tracker in self.torrent.get_trackers('udp'):
@@ -194,25 +202,10 @@ class Client(PeerIO):
 
         if not self.available_peers:
             logging.error('No available peers at the moment')
-            return
+            return False
 
         logging.info(f'Found {len(self.available_peers)} peers from {len(self.trackers)} trackers!')
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            self.executor = executor
-            for piece in self.torrent.pieces():
-                worker = Peer(self, self.torrent.info_hash, self.peer_id, piece)
-                executor.submit(worker.start)
-
-        logging.debug('Writing file ...')
-        with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
-            for _, data in sorted(self.pieces_received, key=lambda x: x[0].index):
-                file.write(data)
-
-        logging.debug('File written to disk!')
-
-        for tracker in self.trackers:
-            self._announce(tracker, _AnnounceRequest.EVENT_STOP)
+        return True
 
 
     def _get_peers_from_tracker(self, tracker: IpAndPort) -> set[IpAndPort]:
@@ -227,6 +220,19 @@ class Client(PeerIO):
                 logging.error(f'Failed to announce STOP to tracker {tracker.ip}:{tracker.port}')
 
         return {peer for peer in response.peers if peer.port != 0}
+
+
+    def _announce_stop_to_trackers(self):
+        for tracker in self.trackers:
+            self._announce(tracker, _AnnounceRequest.EVENT_STOP)
+
+
+    def _start_peer_workers(self):
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            self.executor = executor
+            for piece in self.torrent.pieces():
+                worker = Peer(self, self.torrent.info_hash, self.peer_id, piece)
+                executor.submit(worker.start)
 
 
     def get_peer(self) -> IpAndPort:
@@ -298,3 +304,12 @@ class Client(PeerIO):
             logging.error('Announce failed: %s', e)
             sock.close()
             return None
+
+
+    def _write_file(self, output_directory: str):
+        logging.debug('Writing file ...')
+        with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
+            for _, data in sorted(self.pieces_received, key=lambda x: x[0].index):
+                file.write(data)
+
+        logging.debug('File written to disk!')
