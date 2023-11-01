@@ -4,13 +4,12 @@ import socket
 import struct
 import random
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Optional
 from dataclasses import dataclass
 from client.ip import IpAndPort
 from client.torrent import Torrent, Piece
-from client.peer import PeerResult, PeerError, PeerIO, Peer
+from client.peer import PeerError, PeerIO, Peer
 
 
 @dataclass
@@ -173,14 +172,14 @@ class Client(PeerIO):
         self.torrent = torrent
         self.max_workers = max_workers
         self.peer_id = random.randbytes(Client._PEER_ID_LENGTH)
-        self.left = self.torrent.file_size
+        self.to_download = self.torrent.file_size
         self.downloaded = 0
+        self.available_peers: set[IpAndPort] = set()
+        self.trackers: list[IpAndPort] = list()
+        self.pieces_received: list[tuple[Piece, bytes]] = []
 
 
     def download(self, output_directory: str):
-        self.available_peers: set[IpAndPort] = set()
-        self.trackers: list[IpAndPort] = list()
-
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures: list[tuple[Future[set[IpAndPort], IpAndPort]]] = []
             for tracker in self.torrent.get_trackers('udp'):
@@ -198,9 +197,6 @@ class Client(PeerIO):
             return
 
         logging.info(f'Found {len(self.available_peers)} peers from {len(self.trackers)} trackers!')
-
-        self.pieces_received: list[tuple[Piece, bytes]] = []
-        self.lock = threading.Lock()
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             self.executor = executor
@@ -238,25 +234,21 @@ class Client(PeerIO):
             logging.debug('No peers available, waiting 3 seconds ...')
             time.sleep(3)
 
-        with self.lock:
-            return self.available_peers.pop()
+        return self.available_peers.pop()
 
 
-    def on_result(self, result: PeerResult, peer: IpAndPort, piece: Piece):
-        with self.lock:
-            logging.debug('Task completed. Freeing worker.')
-            self.pieces_received.append((piece, result.data))
-            self.available_peers.add(peer)
-
+    def on_result(self, data: bytes, peer: IpAndPort, piece: Piece):
+        logging.debug(f'Task completed for piece #{piece.index}.')
+        self.pieces_received.append((piece, data))
+        self.available_peers.add(peer)
         progress = int(100 * len(self.pieces_received) / self.torrent.piece_count)
-        logging.info(f'Downloaded {self.pieces_received}/{self.torrent.piece_count} pieces ({progress}%).')
+        logging.info(f'Downloaded {len(self.pieces_received)}/{self.torrent.piece_count} pieces ({progress}%).')
 
 
     def on_error(self, error: PeerError, peer: IpAndPort, piece: Piece):
-        logging.error('Task failed. Discarding peer.')
+        logging.error(f'Task failed for piece #{piece.index}.')
         if error == PeerError.MISSING_DATA:
-            with self.lock:
-                self.available_peers.add(peer)
+            self.available_peers.add(peer)
 
         worker = Peer(self, self.torrent.info_hash, self.peer_id, piece)
         self.executor.submit(worker.start)
@@ -288,7 +280,7 @@ class Client(PeerIO):
                 self.torrent.info_hash,
                 self.peer_id,
                 self.downloaded,
-                self.left,
+                self.to_download,
                 event
             )
             sock.sendto(announce_request.to_bytes(), (tracker.ip, tracker.port))
