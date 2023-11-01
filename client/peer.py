@@ -98,6 +98,8 @@ class Peer:
 
         logging.debug('Starting download ...')
         self._send_message(sock, struct.pack('!b', Peer._INTERESTED))
+        data = struct.pack('!bIII', Peer._REQUEST, self.piece.index, downloaded_bytes, Peer._CHUNK_SIZE)
+        self._send_message(sock, data)
 
         while True:
             message = self._recv_message(sock)
@@ -118,23 +120,18 @@ class Peer:
 
             elif message[0] == Peer._INTERESTED:
                 logging.debug('Received _INTERESTED')
-                continue
 
             elif message[0] == Peer._NOT_INTERESTED:
                 logging.debug('Received _NOT_INTERESTED')
-                continue
 
             elif message[0] == Peer._HAVE:
                 logging.debug('Received _HAVE')
-                continue
 
             elif message[0] == Peer._BITFIELD:
                 logging.debug('Received _BITFIELD')
-                continue
 
             elif message[0] == Peer._REQUEST:
                 logging.debug('Received _REQUEST')
-                continue
 
             elif message[0] == Peer._PIECE:
                 index, = struct.unpack('!I', message[1:5])
@@ -150,7 +147,10 @@ class Peer:
                     sock.close()
                     hasher = hashlib.sha1()
                     hasher.update(downloaded_data)
-                    if hasher.digest() == self.piece.piece_hash:
+                    piece_hash = hasher.digest()
+                    logging.debug(f'downloaded hash: {piece_hash}')
+                    logging.debug(f'expected hash: {self.piece.piece_hash}')
+                    if piece_hash == self.piece.piece_hash:
                         logging.debug('Piece hash matches')
                         self.io.on_result(PeerResult(data), peer, self.piece)
                         return
@@ -164,9 +164,12 @@ class Peer:
                 self._send_message(sock, data)
 
             elif message[0] == Peer._CANCEL:
+                logging.debug('Received _CANCEL')
                 sock.close()
                 self.io.on_error(PeerError.CANCEL, peer, self.piece)
                 return
+
+            time.sleep(3)
 
 
     def _connect(self, sock: socket.socket, peer: IpAndPort) -> bool:

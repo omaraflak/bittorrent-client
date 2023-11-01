@@ -128,7 +128,7 @@ class _AnnounceResponse:
         # 16          32-bit integer  seeders
         # 20 + 6 * n  32-bit integer  IP address
         # 24 + 6 * n  16-bit integer  TCP port
-        if (len(data) - 20) % 6 != 0:
+        if len(data) < 20 or (len(data) - 20) % 6 != 0:
             return _AnnounceResponse(0, 0, 0, 0, [])
 
         peers_count = (len(data) - 20) // 6
@@ -163,12 +163,12 @@ class _AnnounceResponse:
 
 class Client(PeerIO):
     _PEER_ID_LENGTH = 20
-    _MAX_PEERS = 20
+    _MAX_PEERS = 50
 
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 50
+        max_workers: int = 10
     ):
         self.torrent = torrent
         self.max_workers = max_workers
@@ -186,7 +186,7 @@ class Client(PeerIO):
             for tracker in self.torrent.get_trackers('udp'):
                 future = executor.submit(self._get_peers_from_tracker, tracker)
                 futures.append((future, tracker))
-            
+
             for future, tracker in futures:
                 peers = future.result()
                 if len(peers) > 0:
@@ -244,7 +244,7 @@ class Client(PeerIO):
 
     def on_result(self, result: PeerResult, peer: IpAndPort, piece: Piece):
         with self.lock:
-            logging.debug('Task completed. Pushing new task.')
+            logging.debug('Task completed. Freeing worker.')
             self.pieces_received.append((piece, result.data))
             self.available_peers.add(peer)
 
