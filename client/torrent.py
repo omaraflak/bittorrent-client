@@ -9,7 +9,7 @@ from client.bencode import bencode, decode_bencode
 
 @dataclass
 class Piece:
-    index: int
+    piece_index: int
     piece_hash: bytes
     piece_size: int
 

@@ -3,192 +3,116 @@ import socket
 import logging
 import struct
 import hashlib
-from abc import ABC, abstractclassmethod
-from enum import Enum
+from typing import Optional
+from dataclasses import dataclass
 from client.ip import IpAndPort
-from client.torrent import Piece
 
 
-class PeerError(Enum):
-    CONNECTION = 1
-    HANDSHAKE = 2
-    CORRUPTED = 3
-    MISSING_DATA = 4
-    CANCEL = 5
-    UNKNOWN = 6
+@dataclass
+class Work:
+    piece_index: int
+    piece_size: int
+    piece_hash: bytes
 
 
-class PeerIO(ABC):
-    @abstractclassmethod
-    def get_peer(self) -> IpAndPort:
-        raise NotImplementedError()
+@dataclass
+class Result:
+    index: int
+    data: bytes
 
 
-    @abstractclassmethod
-    def on_result(self, data: bytes, peer: IpAndPort, piece: Piece):
-        raise NotImplementedError()
+@dataclass
+class PeerMessage:
+    CHOKE = 0
+    UNCHOKE = 1
+    INTERESTED = 2
+    NOT_INTERESTED = 3
+    HAVE = 4
+    BITFIELD = 5
+    REQUEST = 6
+    PIECE = 7
+    CANCEL = 8
+
+    message_id: int
+    payload: bytes = b''
 
 
-    @abstractclassmethod
-    def on_error(self, error: PeerError, peer: IpAndPort, piece: Piece):
-        raise NotImplementedError()
+    def write(self, sock: socket.socket):
+        data = self.payload + self.message_id.to_bytes(1, 'big')
+        sock.send(int.to_bytes(len(data), 'big') + data)
+
+
+    @classmethod
+    def read(cls, sock: socket.socket) -> Optional['PeerMessage']:
+        try:
+            message_size = sock.recv(4)
+            if len(message_size) == 0 or message_size == 0:
+                # keep alive
+                return None
+            size = int.from_bytes(message_size, 'big')
+            data = sock.recv(size)
+            return PeerMessage(int.from_bytes(data[0], 'big'), data[1:])
+        except socket.error:
+            return None
 
 
 class Peer:
-    _CHUNK_SIZE = 2 ** 14
-    _CHOKE = 0
-    _UNCHOKE = 1
-    _INTERESTED = 2
-    _NOT_INTERESTED = 3
-    _HAVE = 4
-    _BITFIELD = 5
-    _REQUEST = 6
-    _PIECE = 7
-    _CANCEL = 8
-
-
     def __init__(
         self,
-        io: PeerIO,
+        peer: IpAndPort,
+        work_queue: list[Work],
+        result_queue: list[Result],
         info_hash: bytes,
         peer_id: bytes,
-        piece: Piece
+        piece_count: int,
+        chunk_size: int = 2 ** 14
     ):
-        self.io = io
+        self.peer = peer
+        self.work_queue = work_queue
+        self.result_queue = result_queue
         self.info_hash = info_hash
         self.peer_id = peer_id
-        self.piece = piece
+        self.piece_count = piece_count
+        self.chunk_size = chunk_size
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.has_piece: list[bool] = [False] * piece_count
+        self.chocked = True
 
 
-    def start(self):
-        peer = self.io.get_peer()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
+    def start(self) -> bool:
+        self.sock.settimeout(5)
+        if not self._connect():
+            self.sock.close()
+            return False
 
-        if not self._connect(sock, peer):
-            return
+        self.sock.settimeout(30)
+        while len(self.result_queue) != self.piece_count:
+            self._download()
 
-        # check index presence
-        message = self._recv_message(sock)
-        logging.debug('Waiting for bitfield ...')
-        if message[0] == Peer._BITFIELD:
-            bitfield = message[1:]
-            bitfield_bin = bin(int.from_bytes(bitfield, 'big'))
-            logging.debug(f'Received bitfield: {bitfield_bin}')
-            logging.debug(f'Checking index {self.piece.index}')
-            if bitfield_bin[self.piece.index] == '0':
-                logging.warning(f'Peer does not have data')
-                sock.close()
-                self.io.on_error(PeerError.MISSING_DATA, peer, self.piece)
-                return
-        else:
-            logging.error(f'Expected bitfield, got {message}')
-            self.io.on_error(PeerError.UNKNOWN, peer, self.piece)
-            return
-
-        # receive loop
-        downloaded_data = bytearray(self.piece.piece_size)
-        downloaded_bytes = 0
-
-        logging.debug('Start download...')
-        self._send_message(sock, struct.pack('!b', Peer._UNCHOKE))
-        self._send_message(sock, struct.pack('!b', Peer._INTERESTED))
-
-        while True:
-            message = self._recv_message(sock)
-
-            if len(message) == 0:
-                time.sleep(3)
-
-            elif message[0] == Peer._CHOKE:
-                logging.debug('Choked! Sleeping 10 seconds ...')
-                time.sleep(10)
-
-            elif message[0] == Peer._UNCHOKE:
-                logging.debug('Unchoked!')
-                length = min(Peer._CHUNK_SIZE, self.piece.piece_size - downloaded_bytes)
-                data = struct.pack('!bIII', Peer._REQUEST, self.piece.index, downloaded_bytes, length)
-                self._send_message(sock, data)
-
-            elif message[0] == Peer._INTERESTED:
-                logging.debug('_INTERESTED')
-
-            elif message[0] == Peer._NOT_INTERESTED:
-                logging.debug('_NOT_INTERESTED')
-
-            elif message[0] == Peer._HAVE:
-                logging.debug('_HAVE')
-
-            elif message[0] == Peer._BITFIELD:
-                logging.debug('_BITFIELD')
-
-            elif message[0] == Peer._REQUEST:
-                logging.debug('_REQUEST')
-
-            elif message[0] == Peer._PIECE:
-                index, = struct.unpack('!I', message[1:5])
-                start, = struct.unpack('!I', message[5:9])
-                data = message[9:]
-                downloaded_data[start : start + len(data)] = data
-                downloaded_bytes += len(data)
-                progress = int(100 * downloaded_bytes / self.piece.piece_size)
-                logging.debug(f'piece#{self.piece.index}: {downloaded_bytes}/{self.piece.piece_size} bytes downloaded ({progress}%).')
-
-                if downloaded_bytes == self.piece.piece_size or downloaded_bytes == 0:
-                    logging.debug('Received piece! Closing peer connection.')
-                    self._send_message(sock, struct.pack('!bI', Peer._HAVE, index))
-                    sock.close()
-                    hasher = hashlib.sha1()
-                    hasher.update(downloaded_data)
-                    piece_hash = hasher.digest()
-                    logging.debug(f'downloaded hash: {piece_hash}')
-                    logging.debug(f'expected hash: {self.piece.piece_hash}')
-                    if piece_hash == self.piece.piece_hash:
-                        logging.debug('Piece hash matches')
-                        self.io.on_result(data, peer, self.piece)
-                        return
-                    else:
-                        logging.debug('Piece corrupted!')
-                        self.io.on_error(PeerError.CORRUPTED, peer, self.piece)
-                        return
-
-                length = min(Peer._CHUNK_SIZE, self.piece.piece_size - downloaded_bytes)
-                data = struct.pack('!bIII', Peer._REQUEST, self.piece.index, downloaded_bytes, length)
-                self._send_message(sock, data)
-
-            elif message[0] == Peer._CANCEL:
-                logging.debug('_CANCEL')
-                sock.close()
-                self.io.on_error(PeerError.CANCEL, peer, self.piece)
-                return
-
-            time.sleep(3)
+        self.sock.close()
+        return True
 
 
-    def _connect(self, sock: socket.socket, peer: IpAndPort) -> bool:
+    def _connect(self) -> bool:
         try:
-            logging.debug(f'Connecting to {peer.ip}:{peer.port} ...')
-            sock.connect((peer.ip, peer.port))
-            logging.debug('Connected!')
-            if self._handshake(sock):
+            logging.debug(f'Connecting to {self.peer.ip}:{self.peer.port}...')
+            self.sock.connect((self.peer.ip, self.peer.port))
+            logging.debug(f'Connected to {self.peer.ip}:{self.peer.port}!')
+            if self._handshake():
                 logging.debug('Handshake successful!')
                 return True
             logging.error('Handshake failed')
-            sock.close()
-            self.io.on_error(PeerError.HANDSHAKE, peer, self.piece)
         except socket.error as e:
-            logging.error('Connection failed: %s', e)
-            sock.close()
-            self.io.on_error(PeerError.CONNECTION, peer, self.piece)
+            logging.error(f'Failed to connect to {self.peer.ip}:{self.peer.port}: %s', e)
         return False
 
 
-    def _handshake(self, sock: socket.socket) -> bool:
+    def _handshake(self) -> bool:
         header = struct.pack('!b', 19) + b'BitTorrent protocol'
         handshake = header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id)
         logging.debug('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id))
-        sock.send(handshake)
-        data = sock.recv(len(header) + 48)
+        self.sock.send(handshake)
+        data = self.sock.recv(len(header) + 48)
         _header, _, _info_hash, _ = struct.unpack('!20sQ20s20s', data)
         logging.debug('Recv handshake: %s', data)
         return (
@@ -197,17 +121,91 @@ class Peer:
         )
 
 
-    def _send_message(self, sock: socket.socket, data: bytes):
-        sock.send(struct.pack('!I', len(data)) + data)
+    def _download(self) -> bool:
+        work = self.work_queue.pop()
+        downloaded_data = bytearray(work.piece_size)
+        downloaded_bytes = 0
+        received_chunk = True
+        requested_chunk = False
 
+        logging.debug('Start download...')
+        PeerMessage(PeerMessage.UNCHOKE).write(self.sock)
+        PeerMessage(PeerMessage.INTERESTED).write(self.sock)
 
-    def _recv_message(self, sock: socket.socket) -> bytes:
-        try:
-            bytes_size = sock.recv(4)
-            if len(bytes_size) == 0:
-                return b''
-            size, = struct.unpack('!I', bytes_size)
-            return sock.recv(size)
+        while True:
+            message = PeerMessage.read(self.sock)
 
-        except socket.error:
-            return b''
+            if not message:
+                time.sleep(3)
+
+            elif message.message_id == PeerMessage.CHOKE:
+                logging.debug('Choked!')
+                self.chocked = True
+
+            elif message.message_id == PeerMessage.UNCHOKE:
+                logging.debug('Unchoked!')
+                self.chocked = False
+
+            elif message.message_id == PeerMessage.INTERESTED:
+                logging.debug('_INTERESTED')
+
+            elif message.message_id == PeerMessage.NOT_INTERESTED:
+                logging.debug('_NOT_INTERESTED')
+
+            elif message.message_id == PeerMessage.HAVE:
+                logging.debug('_HAVE')
+                index = int.from_bytes(message.payload, 'big')
+                self.has_piece[index] = True
+
+            elif message.message_id == PeerMessage.BITFIELD:
+                logging.debug('_BITFIELD')
+                bitfield = bin(int.from_bytes(message.payload, 'big'))[2:]
+                for index, bit in enumerate(bitfield):
+                    self.has_piece[index] = bit == '1'
+
+                if not self.has_piece[work.piece_index]:
+                    logging.warning(f'Peer does not have data')
+                    self.work_queue.append(work)
+                    return False
+
+            elif message.message_id == PeerMessage.REQUEST:
+                logging.debug('_REQUEST')
+
+            elif message.message_id == PeerMessage.PIECE:
+                index, = struct.unpack('!I', message[1:5])
+                start, = struct.unpack('!I', message[5:9])
+                data = message[9:]
+                downloaded_data[start : start + len(data)] = data
+                downloaded_bytes += len(data)
+                progress = int(100 * downloaded_bytes / work.piece_size)
+                received_chunk = True
+                logging.debug(f'piece#{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
+
+                if downloaded_bytes == 0 or downloaded_bytes == work.piece_size:
+                    logging.debug(f'Received piece {work.piece_index}!')
+                    PeerMessage(PeerMessage.HAVE, int.to_bytes(index, 4, 'big')).write(self.sock)
+                    hasher = hashlib.sha1()
+                    hasher.update(downloaded_data)
+                    piece_hash = hasher.digest()
+                    logging.debug(f'downloaded hash: {piece_hash}')
+                    logging.debug(f'expected hash: {work.piece_hash}')
+                    if piece_hash == work.piece_hash:
+                        logging.debug('Piece hash matches')
+                        self.result_queue.append(Result(work.piece_index, downloaded_data))
+                        return True
+                    else:
+                        logging.debug('Piece corrupted!')
+                        self.work_queue.append(work)
+                        return False
+
+            elif message.message_id == PeerMessage.CANCEL:
+                logging.debug('_CANCEL')
+                self.work_queue.append(work)
+                return False
+
+            if received_chunk and not requested_chunk and not self.chocked:
+                received_chunk = False
+                requested_chunk = True
+                length = min(self.chunk_size, work.piece_size - downloaded_bytes)
+                payload = struct.pack('!III', work.piece_index, downloaded_bytes, length)
+                PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
