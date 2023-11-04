@@ -161,8 +161,7 @@ class _AnnounceResponse:
 
 
 class Client(PeerIO):
-    _PEER_ID_LENGTH = 20
-    _MAX_PEERS = 50
+    _MAX_PEERS = 100
 
     def __init__(
         self,
@@ -171,11 +170,11 @@ class Client(PeerIO):
     ):
         self.torrent = torrent
         self.max_workers = max_workers
-        self.peer_id = random.randbytes(Client._PEER_ID_LENGTH)
+        self.peer_id = random.randbytes(20)
         self.to_download = self.torrent.file_size
         self.downloaded = 0
-        self.available_peers: set[IpAndPort] = set()
         self.trackers: list[IpAndPort] = list()
+        self.available_peers: set[IpAndPort] = set()
         self.pieces_received: list[tuple[Piece, bytes]] = []
 
 
@@ -212,7 +211,10 @@ class Client(PeerIO):
         response = self._announce(tracker, _AnnounceRequest.EVENT_START)
         if not response:
             logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
-            return []
+            return {}
+
+        if not response:
+            return {}
 
         if len(response.peers) == 0:
             response = self._announce(tracker, _AnnounceRequest.EVENT_STOP)
@@ -237,7 +239,6 @@ class Client(PeerIO):
 
     def get_peer(self) -> IpAndPort:
         while not self.available_peers:
-            logging.debug('No peers available, waiting 3 seconds ...')
             time.sleep(3)
 
         return self.available_peers.pop()

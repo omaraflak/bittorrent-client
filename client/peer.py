@@ -90,15 +90,14 @@ class Peer:
         downloaded_data = bytearray(self.piece.max_piece_size)
         downloaded_bytes = 0
 
-        logging.debug('Starting download ...')
+        logging.debug('Start download...')
+        self._send_message(sock, struct.pack('!b', Peer._UNCHOKE))
         self._send_message(sock, struct.pack('!b', Peer._INTERESTED))
 
         while True:
-            logging.debug('Waiting for message ...')
             message = self._recv_message(sock)
 
             if len(message) == 0:
-                logging.debug('Keep alive ...')
                 time.sleep(3)
 
             elif message[0] == Peer._CHOKE:
@@ -127,17 +126,17 @@ class Peer:
                 logging.debug('_REQUEST')
 
             elif message[0] == Peer._PIECE:
-                logging.debug('_PIECE')
                 index, = struct.unpack('!I', message[1:5])
                 start, = struct.unpack('!I', message[5:9])
                 data = message[9:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
                 progress = int(100 * downloaded_bytes / self.piece.max_piece_size)
-                logging.debug(f'# {downloaded_bytes}/{self.piece.max_piece_size} bytes downloaded ({progress}%).')
+                logging.debug(f'piece#{self.piece.index}: {downloaded_bytes}/{self.piece.max_piece_size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == self.piece.max_piece_size or downloaded_bytes == 0:
                     logging.debug('Received piece! Closing peer connection.')
+                    self._send_message(sock, struct.pack('!bI', Peer._HAVE, index))
                     sock.close()
                     hasher = hashlib.sha1()
                     hasher.update(downloaded_data)
@@ -203,8 +202,12 @@ class Peer:
 
 
     def _recv_message(self, sock: socket.socket) -> bytes:
-        bytes_size = sock.recv(4)
-        if len(bytes_size) == 0:
+        try:
+            bytes_size = sock.recv(4)
+            if len(bytes_size) == 0:
+                return b''
+            size, = struct.unpack('!I', bytes_size)
+            return sock.recv(size)
+
+        except socket.error:
             return b''
-        size, = struct.unpack('!I', bytes_size)
-        return sock.recv(size)
