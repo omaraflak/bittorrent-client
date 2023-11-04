@@ -11,7 +11,7 @@ from client.bencode import bencode, decode_bencode
 class Piece:
     index: int
     piece_hash: bytes
-    max_piece_size: int
+    piece_size: int
 
 
 class Torrent:

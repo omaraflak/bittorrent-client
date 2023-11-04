@@ -87,7 +87,7 @@ class Peer:
             return
 
         # receive loop
-        downloaded_data = bytearray(self.piece.max_piece_size)
+        downloaded_data = bytearray(self.piece.piece_size)
         downloaded_bytes = 0
 
         logging.debug('Start download...')
@@ -106,7 +106,7 @@ class Peer:
 
             elif message[0] == Peer._UNCHOKE:
                 logging.debug('Unchoked!')
-                length = min(Peer._CHUNK_SIZE, self.piece.max_piece_size - downloaded_bytes)
+                length = min(Peer._CHUNK_SIZE, self.piece.piece_size - downloaded_bytes)
                 data = struct.pack('!bIII', Peer._REQUEST, self.piece.index, downloaded_bytes, length)
                 self._send_message(sock, data)
 
@@ -131,10 +131,10 @@ class Peer:
                 data = message[9:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
-                progress = int(100 * downloaded_bytes / self.piece.max_piece_size)
-                logging.debug(f'piece#{self.piece.index}: {downloaded_bytes}/{self.piece.max_piece_size} bytes downloaded ({progress}%).')
+                progress = int(100 * downloaded_bytes / self.piece.piece_size)
+                logging.debug(f'piece#{self.piece.index}: {downloaded_bytes}/{self.piece.piece_size} bytes downloaded ({progress}%).')
 
-                if downloaded_bytes == self.piece.max_piece_size or downloaded_bytes == 0:
+                if downloaded_bytes == self.piece.piece_size or downloaded_bytes == 0:
                     logging.debug('Received piece! Closing peer connection.')
                     self._send_message(sock, struct.pack('!bI', Peer._HAVE, index))
                     sock.close()
@@ -152,7 +152,7 @@ class Peer:
                         self.io.on_error(PeerError.CORRUPTED, peer, self.piece)
                         return
 
-                length = min(Peer._CHUNK_SIZE, self.piece.max_piece_size - downloaded_bytes)
+                length = min(Peer._CHUNK_SIZE, self.piece.piece_size - downloaded_bytes)
                 data = struct.pack('!bIII', Peer._REQUEST, self.piece.index, downloaded_bytes, length)
                 self._send_message(sock, data)
 
