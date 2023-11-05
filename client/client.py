@@ -34,7 +34,6 @@ class Client:
         peers = trackers.get_peers()
 
         self.work_queue.update(self.torrent.pieces)
-        random.shuffle(self.work_queue)
         piece_count = len(self.work_queue)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
