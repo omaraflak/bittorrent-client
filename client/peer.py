@@ -136,7 +136,7 @@ class Peer:
 
         downloaded_data = bytearray(work.piece_size)
         downloaded_bytes = 0
-        should_request_chunk = False
+        should_request_chunk = True
 
         logging.debug('Start download...')
         PeerMessage(PeerMessage.UNCHOKE).write(self.sock)
