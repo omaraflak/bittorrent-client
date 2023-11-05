@@ -17,9 +17,9 @@ class File:
 
 @dataclass
 class Piece:
-    piece_index: int
-    piece_hash: bytes
-    piece_size: int
+    index: int
+    size: int
+    sha1: bytes
 
 
 class Torrent:

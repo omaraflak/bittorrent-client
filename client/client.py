@@ -57,7 +57,7 @@ class Client:
     def _write_file(self, output_directory: str):
         logging.debug('Writing file ...')
 
-        self.result_stack.sort(key=lambda x: x.piece.piece_index)
+        self.result_stack.sort(key=lambda x: x.piece.index)
         data_array = b''.join(result.data for result in self.result_stack)
 
         for file in self.torrent.files:

@@ -122,9 +122,9 @@ class Peer:
     def _download(self):
         try:
             work = self.work_queue.popleft()
-            if len(self.bitfield) > 0 and not self._has_piece(work.piece_index):
+            if len(self.bitfield) > 0 and not self._has_piece(work.index):
                 self.work_queue.append(work)
-                logging.warning(f'Peer {self.peer.ip} does not have piece #{work.piece_index}, dropping work.')
+                logging.warning(f'Peer {self.peer.ip} does not have piece #{work.index}, dropping work.')
                 time.sleep(5)
                 return
         except IndexError:
@@ -135,7 +135,7 @@ class Peer:
             time.sleep(30)
             return
 
-        downloaded_data = bytearray(work.piece_size)
+        downloaded_data = bytearray(work.size)
         downloaded_bytes = 0
         should_request_chunks = True
         requests_received = 0
@@ -173,7 +173,7 @@ class Peer:
             elif message.message_id == PeerMessage.BITFIELD:
                 logging.debug('_BITFIELD')
                 self.bitfield = bytearray(message.payload)
-                if not self._has_piece(work.piece_index):
+                if not self._has_piece(work.index):
                     logging.warning(f'Peer does not have data')
                     self.work_queue.append(work)
                     return
@@ -187,22 +187,17 @@ class Peer:
                 data = message.payload[8:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
-                progress = int(100 * downloaded_bytes / work.piece_size)
+                progress = int(100 * downloaded_bytes / work.size)
                 requests_received += 1
                 if requests_received == self.max_batch_requests:
                     should_request_chunks = True
 
-                logging.info(f'Piece #{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
+                logging.info(f'Piece #{work.index}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
 
-                if downloaded_bytes == work.piece_size:
-                    logging.info(f'Received piece {work.piece_index}!')
-                    PeerMessage(PeerMessage.HAVE, work.piece_index.to_bytes(4, 'big')).write(self.sock)
-                    hasher = hashlib.sha1()
-                    hasher.update(downloaded_data)
-                    piece_hash = hasher.digest()
-                    logging.debug(f'downloaded hash: {piece_hash}')
-                    logging.debug(f'expected hash: {work.piece_hash}')
-                    if piece_hash == work.piece_hash:
+                if downloaded_bytes == work.size:
+                    logging.info(f'Received piece {work.index}!')
+                    PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
+                    if self._sha1(downloaded_data) == work.sha1:
                         logging.debug('Piece hash matches')
                         self.result_stack.append(PieceData(work, downloaded_data))
                         return
@@ -216,14 +211,14 @@ class Peer:
                 self.work_queue.append(work)
                 return
 
-            if should_request_chunks and not self.chocked and self._has_piece(work.piece_index):
-                logging.debug(f'Sending request to {self.peer.ip} for piece #{work.piece_index}...')
+            if should_request_chunks and not self.chocked and self._has_piece(work.index):
+                logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
                 should_request_chunks = False
                 requests_received = 0
                 tmp = downloaded_bytes
                 for _ in range(self.max_batch_requests):
-                    length = min(self.chunk_size, work.piece_size - tmp)
-                    payload = struct.pack('!III', work.piece_index, tmp, length)
+                    length = min(self.chunk_size, work.size - tmp)
+                    payload = struct.pack('!III', work.index, tmp, length)
                     PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
                     tmp += length
 
@@ -249,3 +244,9 @@ class Peer:
         byte = self.bitfield[q]
         mask = 1 << (7 - r)
         return mask & byte > 0
+
+
+    def _sha1(self, data: bytes) -> bytes:
+        hasher = hashlib.sha1()
+        hasher.update(data)
+        return hasher.digest()
