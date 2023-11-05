@@ -68,7 +68,7 @@ class Torrent:
             res = urlparse(url)
             if not res.port:
                 continue
-            if not protocol or protocol == res.scheme.lower():
+            if not protocol or protocol.lower() == res.scheme.lower():
                 result.append(IpAndPort(res.hostname, res.port))
         return result
 
