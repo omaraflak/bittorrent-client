@@ -187,9 +187,9 @@ class Peer:
                 downloaded_bytes += len(data)
                 progress = int(100 * downloaded_bytes / work.piece_size)
                 should_request_chunk = True
-                logging.info(f'piece#{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
+                logging.info(f'Piece #{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
 
-                if downloaded_bytes == 0 or downloaded_bytes == work.piece_size:
+                if downloaded_bytes == work.piece_size:
                     logging.info(f'Received piece {work.piece_index}!')
                     PeerMessage(PeerMessage.HAVE, work.piece_index.to_bytes(4, 'big')).write(self.sock)
                     hasher = hashlib.sha1()
