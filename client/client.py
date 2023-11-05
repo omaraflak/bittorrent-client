@@ -11,7 +11,7 @@ class Client:
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 10
+        max_workers: int = 50
     ):
         self.torrent = torrent
         self.max_workers = max_workers

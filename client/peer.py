@@ -99,7 +99,7 @@ class Peer:
             self.sock.connect((self.peer.ip, self.peer.port))
             logging.debug(f'Connected to {self.peer.ip}:{self.peer.port}!')
             if self._handshake():
-                logging.info(f'Connected to {self.peer.ip}:{self.peer.port} and handshake successful!')
+                logging.info(f'Handshake with {self.peer.ip}:{self.peer.port}!')
                 return True
             logging.error('Handshake failed')
         except socket.error as e:

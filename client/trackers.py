@@ -171,14 +171,14 @@ class Trackers:
         self.peer_id = peer_id or random.randbytes(20)
 
 
-    def get_peers(self) -> list[IpAndPort]:
+    def get_peers(self) -> set[IpAndPort]:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             trackers = self.torrent.get_trackers('udp')
-            return [
+            return {
                 peer
                 for peers in executor.map(self._get_peers_from_tracker, trackers)
                 for peer in peers
-            ]
+            }
 
 
     def _get_peers_from_tracker(self, tracker: IpAndPort) -> set[IpAndPort]:
