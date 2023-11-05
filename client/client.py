@@ -5,7 +5,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from client.trackers import Trackers
 from client.torrent import Torrent, Piece
-from client.peer import Peer, PieceData
+from client.peer import Peer, PieceData, Bitfield
 
 
 class Client:
@@ -39,6 +39,7 @@ class Client:
             for peer in peers:
                 worker = Peer(
                     peer,
+                    self._get_work,
                     self.work_queue,
                     self.result_stack,
                     self.torrent.info_hash,
@@ -52,6 +53,10 @@ class Client:
             return
 
         self._write_file(output_directory)
+
+
+    def _get_work(self, bitfield: Bitfield) -> Piece:
+        return self.work_queue.popleft()
 
 
     def _write_file(self, output_directory: str):

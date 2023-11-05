@@ -4,7 +4,7 @@ import logging
 import struct
 import hashlib
 from collections import deque
-from typing import Optional
+from typing import Optional, Callable
 from dataclasses import dataclass
 from client.ip import IpAndPort
 from client.torrent import Piece
@@ -49,10 +49,39 @@ class PeerMessage:
             return None
 
 
+@dataclass
+class Bitfield:
+    value: bytearray = bytearray()
+
+
+    def set_piece(self, index: int):
+        q = index // 8
+        r = index % 8
+        if q >= len(self.value):
+            diff = q - len(self.value) + 1
+            self.value.extend(bytes(diff))
+
+        byte = self.value[q]
+        mask = 1 << (7 - r)
+        self.value[q] = byte ^ mask
+
+
+    def has_piece(self, index: int) -> bool:
+        q = index // 8
+        r = index % 8
+        if q >= len(self.value):
+            return False
+
+        byte = self.value[q]
+        mask = 1 << (7 - r)
+        return mask & byte > 0
+
+
 class Peer:
     def __init__(
         self,
         peer: IpAndPort,
+        get_work: Callable[[Bitfield], Piece],
         work_queue: deque[Piece],
         result_stack: list[PieceData],
         info_hash: bytes,
@@ -62,6 +91,7 @@ class Peer:
         max_batch_requests: int = 1
     ):
         self.peer = peer
+        self.get_work = get_work
         self.work_queue = work_queue
         self.result_stack = result_stack
         self.info_hash = info_hash
@@ -70,7 +100,7 @@ class Peer:
         self.chunk_size = chunk_size
         self.max_batch_requests = max_batch_requests
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.bitfield = bytearray()
+        self.bitfield = Bitfield()
         self.chocked = True
 
 
@@ -121,8 +151,8 @@ class Peer:
 
     def _download(self):
         try:
-            work = self.work_queue.popleft()
-            if len(self.bitfield) > 0 and not self._has_piece(work.index):
+            work = self.get_work(self.bitfield)
+            if len(self.bitfield.value) > 0 and not self.bitfield.has_piece(work.index):
                 self.work_queue.append(work)
                 logging.warning(f'Peer {self.peer.ip} does not have piece #{work.index}, dropping work.')
                 time.sleep(5)
@@ -168,12 +198,12 @@ class Peer:
             elif message.message_id == PeerMessage.HAVE:
                 logging.debug('_HAVE')
                 index = int.from_bytes(message.payload, 'big')
-                self._set_has_piece(index)
+                self.bitfield.set_piece(index)
 
             elif message.message_id == PeerMessage.BITFIELD:
                 logging.debug('_BITFIELD')
-                self.bitfield = bytearray(message.payload)
-                if not self._has_piece(work.index):
+                self.bitfield.value = bytearray(message.payload)
+                if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
                     self.work_queue.append(work)
                     return
@@ -211,7 +241,7 @@ class Peer:
                 self.work_queue.append(work)
                 return
 
-            if should_request_chunks and not self.chocked and self._has_piece(work.index):
+            if should_request_chunks and not self.chocked and self.bitfield.has_piece(work.index):
                 logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
                 should_request_chunks = False
                 requests_received = 0
@@ -221,29 +251,6 @@ class Peer:
                     payload = struct.pack('!III', work.index, tmp, length)
                     PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
                     tmp += length
-
-
-    def _set_has_piece(self, index: int):
-        q = index // 8
-        r = index % 8
-        if q >= len(self.bitfield):
-            diff = q - len(self.bitfield) + 1
-            self.bitfield.extend(bytes(diff))
-
-        byte = self.bitfield[q]
-        mask = 1 << (7 - r)
-        self.bitfield[q] = byte ^ mask
-
-
-    def _has_piece(self, index: int) -> bool:
-        q = index // 8
-        r = index % 8
-        if q >= len(self.bitfield):
-            return False
-
-        byte = self.bitfield[q]
-        mask = 1 << (7 - r)
-        return mask & byte > 0
 
 
     def _sha1(self, data: bytes) -> bytes:
