@@ -59,7 +59,7 @@ class Peer:
         peer_id: bytes,
         piece_count: int,
         chunk_size: int = 2 ** 14,
-        max_batch_requests: int = 5
+        max_batch_requests: int = 1
     ):
         self.peer = peer
         self.work_queue = work_queue

@@ -33,7 +33,7 @@ class Client:
 
         self.work_queue.extend(self.torrent.pieces())
         random.shuffle(self.work_queue)
-        
+
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for peer in peers:
                 worker = Peer(
@@ -50,9 +50,23 @@ class Client:
             logging.warning('Could not download file.')
             return
 
+        self._write_file(output_directory)
+
+
+    def _write_file(self, output_directory: str):
         logging.debug('Writing file ...')
-        with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
-            for result in sorted(self.result_stack, key=lambda x: x.piece.piece_index):
-                file.write(result.data)
+        
+        self.result_stack.sort(key=lambda x: x.piece.piece_index)
+        data_array = b''.join(result.data for result in self.result_stack)
+
+        offset = 0
+        for file in self.torrent.files:
+            file_directoy = os.path.join(output_directory, *file.path[:-1])
+            os.makedirs(file_directoy, exist_ok=True)
+            file_path = os.path.join(file_directoy, file.path[-1])
+            file_data = data_array[offset : file.size]
+            offset += file.size
+            with open(file_path, 'wb') as fs:
+                fs.write(file_data)
 
         logging.debug('File written to disk!')

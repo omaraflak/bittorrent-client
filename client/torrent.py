@@ -8,6 +8,12 @@ from client.bencode import bencode, decode_bencode
 
 
 @dataclass
+class File:
+    path: list[str]
+    size: int
+
+
+@dataclass
 class Piece:
     piece_index: int
     piece_hash: bytes
@@ -23,6 +29,8 @@ class Torrent:
     _FILE_NAME = 'name'
     _FILE_PIECES = 'pieces'
     _PIECE_BYTES = 'piece length'
+    _FILES = 'files'
+    _PATH = 'path'
 
 
     def __init__(self, data: bytes):
@@ -69,8 +77,19 @@ class Torrent:
 
 
     @cached_property
-    def file_name(self) -> str:
-        return self._decoded[Torrent._INFO][Torrent._FILE_NAME].decode()
+    def files(self) -> list[File]:
+        if Torrent._FILES not in self._decoded[Torrent._INFO]:
+            return File([self._decoded[Torrent._INFO][Torrent._FILE_NAME].decode()], self.file_size)
+        return [
+            File(
+                [
+                    path.decode()
+                    for path in file[Torrent._PATH]
+                ],
+                file[Torrent._FILE_BYTES]
+            )
+            for file in self._decoded[Torrent._INFO][Torrent._FILES]
+        ]
 
 
     @cached_property
