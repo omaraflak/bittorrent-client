@@ -33,9 +33,10 @@ class Torrent:
         result: list[tuple[str, int]] = []
         for url in self.trackers:
             res = urlparse(url)
+            if not res.port:
+                continue
             if not scheme or scheme == res.scheme.lower():
-                if res.port is not None:
-                    result.append(IpAndPort(res.hostname, res.port))
+                result.append(IpAndPort(res.hostname, res.port))
         return result
 
 
