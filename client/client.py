@@ -56,7 +56,7 @@ class Client:
                     self.piece_chunk_size,
                     self.max_peer_batch_requests
                 )
-                executor.submit(worker.start).result()
+                executor.submit(worker.start)
 
         if len(self.result_stack) != piece_count:
             logging.warning('Could not download file.')
