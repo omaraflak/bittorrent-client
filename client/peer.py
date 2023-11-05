@@ -3,6 +3,7 @@ import socket
 import logging
 import struct
 import hashlib
+from collections import deque
 from typing import Optional
 from dataclasses import dataclass
 from client.ip import IpAndPort
@@ -52,8 +53,8 @@ class Peer:
     def __init__(
         self,
         peer: IpAndPort,
-        work_queue: list[Piece],
-        result_queue: list[PieceData],
+        work_queue: deque[Piece],
+        result_stack: list[PieceData],
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
@@ -61,7 +62,7 @@ class Peer:
     ):
         self.peer = peer
         self.work_queue = work_queue
-        self.result_queue = result_queue
+        self.result_stack = result_stack
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.piece_count = piece_count
@@ -78,7 +79,7 @@ class Peer:
             return
 
         self.sock.settimeout(30)
-        while len(self.result_queue) != self.piece_count:
+        while len(self.result_stack) != self.piece_count:
             try:
                 self._download()
             except socket.error as e:
@@ -119,7 +120,12 @@ class Peer:
 
     def _download(self):
         try:
-            work = self.work_queue.pop()
+            work = self.work_queue.popleft()
+            if len(self.bitfield) > 0 and not self._has_piece(work.piece_index):
+                self.work_queue.append(work)
+                logging.warning(f'Peer {self.peer.ip} does not have piece #{work.piece_index}, dropping work.')
+                time.sleep(5)
+                return
         except IndexError:
             # the work queue may be empty because all pieces are being processed
             # however, we don't want peers to shutdown in case the peers processing
@@ -194,7 +200,7 @@ class Peer:
                     logging.debug(f'expected hash: {work.piece_hash}')
                     if piece_hash == work.piece_hash:
                         logging.debug('Piece hash matches')
-                        self.result_queue.append(PieceData(work, downloaded_data))
+                        self.result_stack.append(PieceData(work, downloaded_data))
                         return
                     else:
                         logging.warning('Piece corrupted!')
@@ -207,6 +213,7 @@ class Peer:
                 return
 
             if received_chunk and not requested_chunk and not self.chocked and self._has_piece(work.piece_index):
+                logging.debug(f'Sending request to {self.peer.ip} for piece #{work.piece_index}...')
                 received_chunk = False
                 requested_chunk = True
                 length = min(self.chunk_size, work.piece_size - downloaded_bytes)
