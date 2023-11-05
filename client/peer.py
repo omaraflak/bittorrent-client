@@ -40,10 +40,10 @@ class PeerMessage:
     @classmethod
     def read(cls, sock: socket.socket) -> Optional['PeerMessage']:
         try:
-            message_size = sock.recv(4)
-            if len(message_size) == 0 or message_size == 0:
+            message_size = int.from_bytes(sock.recv(4), 'big')
+            if message_size == 0:
                 return None
-            data = sock.recv(int.from_bytes(message_size, 'big'))
+            data = sock.recv(message_size)
             return PeerMessage(data[0], data[1:])
         except socket.error:
             return None
@@ -136,8 +136,7 @@ class Peer:
 
         downloaded_data = bytearray(work.piece_size)
         downloaded_bytes = 0
-        received_chunk = True
-        requested_chunk = False
+        should_request_chunk = False
 
         logging.debug('Start download...')
         PeerMessage(PeerMessage.UNCHOKE).write(self.sock)
@@ -181,13 +180,13 @@ class Peer:
                 logging.debug('_REQUEST')
 
             elif message.message_id == PeerMessage.PIECE:
-                index, = struct.unpack('!I', message[1:5])
-                start, = struct.unpack('!I', message[5:9])
-                data = message[9:]
+                index = int.from_bytes(message.payload[0:4], 'big')
+                start = int.from_bytes(message.payload[4:8], 'big')
+                data = message.payload[8:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
                 progress = int(100 * downloaded_bytes / work.piece_size)
-                received_chunk = True
+                should_request_chunk = True
                 logging.info(f'piece#{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == 0 or downloaded_bytes == work.piece_size:
@@ -212,10 +211,9 @@ class Peer:
                 self.work_queue.append(work)
                 return
 
-            if received_chunk and not requested_chunk and not self.chocked and self._has_piece(work.piece_index):
+            if should_request_chunk and not self.chocked and self._has_piece(work.piece_index):
                 logging.debug(f'Sending request to {self.peer.ip} for piece #{work.piece_index}...')
-                received_chunk = False
-                requested_chunk = True
+                should_request_chunk = False
                 length = min(self.chunk_size, work.piece_size - downloaded_bytes)
                 payload = struct.pack('!III', work.piece_index, downloaded_bytes, length)
                 PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
