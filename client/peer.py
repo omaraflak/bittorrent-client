@@ -33,7 +33,7 @@ class PeerMessage:
 
     def write(self, sock: socket.socket):
         data = self.payload + self.message_id.to_bytes(1, 'big')
-        sock.send(int.to_bytes(len(data), 4, 'big') + data)
+        sock.send(len(data).to_bytes(4, 'big') + data)
 
 
     @classmethod
@@ -41,10 +41,8 @@ class PeerMessage:
         try:
             message_size = sock.recv(4)
             if len(message_size) == 0 or message_size == 0:
-                # keep alive
                 return None
-            size = int.from_bytes(message_size, 'big')
-            data = sock.recv(size)
+            data = sock.recv(int.from_bytes(message_size, 'big'))
             return PeerMessage(int.from_bytes(data[0], 'big'), data[1:])
         except socket.error:
             return None
@@ -82,7 +80,7 @@ class Peer:
         self.sock.settimeout(30)
         while len(self.result_queue) != self.piece_count:
             self._download()
-        
+
         logging.debug('exiting...')
 
         self.sock.close()
@@ -118,7 +116,15 @@ class Peer:
 
 
     def _download(self):
-        work = self.work_queue.pop()
+        try:
+            work = self.work_queue.pop()
+        except IndexError:
+            # the work queue may be empty because all pieces are being processed
+            # however, we don't want peers to shutdown in case the peers processing
+            # the pieces fail
+            time.sleep(10)
+            return
+
         downloaded_data = bytearray(work.piece_size)
         downloaded_bytes = 0
         received_chunk = True
@@ -132,6 +138,7 @@ class Peer:
             message = PeerMessage.read(self.sock)
 
             if not message:
+                # keep alive
                 time.sleep(3)
 
             elif message.message_id == PeerMessage.CHOKE:
@@ -179,7 +186,7 @@ class Peer:
 
                 if downloaded_bytes == 0 or downloaded_bytes == work.piece_size:
                     logging.info(f'Received piece {work.piece_index}!')
-                    PeerMessage(PeerMessage.HAVE, int.to_bytes(index, 4, 'big')).write(self.sock)
+                    PeerMessage(PeerMessage.HAVE, work.piece_index.to_bytes(4, 'big')).write(self.sock)
                     hasher = hashlib.sha1()
                     hasher.update(downloaded_data)
                     piece_hash = hasher.digest()
