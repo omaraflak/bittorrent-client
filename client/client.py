@@ -1,7 +1,7 @@
 import os
 import random
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from client.trackers import Trackers
 from client.torrent import Torrent, Piece
 from client.peer import Peer, PieceData
@@ -21,7 +21,7 @@ class Client:
 
 
     def download(self, output_directory: str):
-        trackers = Trackers(self.torrent, max_peers_per_tracker=10, peer_id=self.peer_id)
+        trackers = Trackers(self.torrent, max_peers_per_tracker=self.max_workers * 2, peer_id=self.peer_id)
         peers = trackers.get_peers()
 
         self.work_queue.extend(self.torrent.pieces())        

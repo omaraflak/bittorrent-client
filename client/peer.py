@@ -67,7 +67,7 @@ class Peer:
         self.piece_count = piece_count
         self.chunk_size = chunk_size
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.has_piece: list[bool] = [False] * piece_count
+        self.bitfield = bytearray()
         self.chocked = True
 
 
@@ -124,6 +124,7 @@ class Peer:
             # the work queue may be empty because all pieces are being processed
             # however, we don't want peers to shutdown in case the peers processing
             # the pieces fail
+            logging.warning('No work in queue')
             time.sleep(30)
             return
 
@@ -160,15 +161,12 @@ class Peer:
             elif message.message_id == PeerMessage.HAVE:
                 logging.debug('_HAVE')
                 index = int.from_bytes(message.payload, 'big')
-                self.has_piece[index] = True
+                self._set_has_piece(index)
 
             elif message.message_id == PeerMessage.BITFIELD:
                 logging.debug('_BITFIELD')
-                bitfield = bin(int.from_bytes(message.payload, 'big'))[2:]
-                for index, bit in enumerate(bitfield):
-                    self.has_piece[index] = bit == '1'
-
-                if not self.has_piece[work.piece_index]:
+                self.bitfield = bytearray(message.payload)
+                if not self._has_piece(work.piece_index):
                     logging.warning(f'Peer does not have data')
                     self.work_queue.append(work)
                     return
@@ -208,9 +206,32 @@ class Peer:
                 self.work_queue.append(work)
                 return
 
-            if received_chunk and not requested_chunk and not self.chocked:
+            if received_chunk and not requested_chunk and not self.chocked and self._has_piece(work.piece_index):
                 received_chunk = False
                 requested_chunk = True
                 length = min(self.chunk_size, work.piece_size - downloaded_bytes)
                 payload = struct.pack('!III', work.piece_index, downloaded_bytes, length)
                 PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
+
+
+    def _set_has_piece(self, index: int):
+        q = index // 8
+        r = index % 8
+        if q >= len(self.bitfield):
+            diff = q - len(self.bitfield) + 1
+            self.bitfield.extend(bytes(diff))
+
+        byte = self.bitfield[q]
+        mask = 1 << (7 - r)
+        self.bitfield[q] = byte ^ mask
+
+
+    def _has_piece(self, index: int) -> bool:
+        q = index // 8
+        r = index % 8
+        if q >= len(self.bitfield):
+            return False
+
+        byte = self.bitfield[q]
+        mask = 1 << (7 - r)
+        return mask & byte > 0
