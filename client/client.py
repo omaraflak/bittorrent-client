@@ -15,12 +15,16 @@ class Client:
         torrent: Torrent,
         max_peer_workers: int = 1000,
         max_tracker_workers: int = 100,
-        max_peers_per_tracker: int = 5000
+        max_peers_per_tracker: int = 5000,
+        max_peer_batch_requests: int = 5,
+        piece_chunk_size: int = 2 ** 14
     ):
         self.torrent = torrent
         self.max_peer_workers = max_peer_workers
+        self.max_peer_batch_requests = max_peer_batch_requests
         self.max_tracker_workers = max_tracker_workers
         self.max_peers_per_tracker = max_peers_per_tracker
+        self.piece_chunk_size = piece_chunk_size
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
         self.result_stack: list[PieceData] = list()
@@ -48,7 +52,9 @@ class Client:
                     self.result_stack,
                     self.torrent.info_hash,
                     self.peer_id,
-                    piece_count
+                    piece_count,
+                    self.piece_chunk_size,
+                    self.max_peer_batch_requests
                 )
                 executor.submit(worker.start)
 

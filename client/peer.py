@@ -91,8 +91,8 @@ class Peer:
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
-        chunk_size: int = 2 ** 14,
-        max_batch_requests: int = 5
+        chunk_size: int,
+        max_batch_requests: int
     ):
         self.peer = peer
         self.get_work = get_work
