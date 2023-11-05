@@ -17,8 +17,8 @@ class Client:
         self.torrent = torrent
         self.max_workers = max_workers
         self.peer_id = random.randbytes(20)
-        self.work_queue: deque[Piece] = []
-        self.result_stack: list[PieceData] = []
+        self.work_queue: deque[Piece] = deque()
+        self.result_stack: list[PieceData] = list()
 
 
     def download(self, output_directory: str):
