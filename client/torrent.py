@@ -44,6 +44,10 @@ class Piece:
     sha1: bytes
 
 
+    def __hash__(self) -> int:
+        return hash((self.index, self.size, self.sha1))
+
+
 @dataclass
 class Torrent:
     _SHA1_SIZE = 20
