@@ -122,7 +122,7 @@ class Peer:
             # the work queue may be empty because all pieces are being processed
             # however, we don't want peers to shutdown in case the peers processing
             # the pieces fail
-            time.sleep(10)
+            time.sleep(30)
             return
 
         downloaded_data = bytearray(work.piece_size)
