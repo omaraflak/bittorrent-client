@@ -9,8 +9,10 @@ from client.bencode import bencode, decode_bencode
 
 @dataclass
 class File:
-    path: list[str]
+    index: int
+    start: int
     size: int
+    path: list[str]
 
 
 @dataclass
@@ -80,16 +82,16 @@ class Torrent:
     def files(self) -> list[File]:
         if Torrent._FILES not in self._decoded[Torrent._INFO]:
             return File([self._decoded[Torrent._INFO][Torrent._FILE_NAME].decode()], self.file_size)
-        return [
-            File(
-                [
-                    path.decode()
-                    for path in file[Torrent._PATH]
-                ],
-                file[Torrent._FILE_BYTES]
-            )
-            for file in self._decoded[Torrent._INFO][Torrent._FILES]
-        ]
+        
+        result: list[File] = list()
+        start = 0
+        for index, file in enumerate(self._decoded[Torrent._INFO][Torrent._FILES]):
+            paths = [path.decode() for path in file[Torrent._PATH]]
+            size = file[Torrent._FILE_BYTES]
+            result.append(File(index, start, size, paths))
+            start += size
+
+        return result
 
 
     @cached_property

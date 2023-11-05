@@ -9,7 +9,7 @@ from client.peer import Peer, PieceData
 
 
 class Client:
-    _PEERS_PER_TRACKER = 5000
+    _PEERS_PER_TRACKER = 5
 
     def __init__(
         self,
@@ -33,6 +33,7 @@ class Client:
 
         self.work_queue.extend(self.torrent.pieces())
         random.shuffle(self.work_queue)
+        piece_count = len(self.work_queue)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for peer in peers:
@@ -42,11 +43,11 @@ class Client:
                     self.result_stack,
                     self.torrent.info_hash,
                     self.peer_id,
-                    self.torrent.piece_count
+                    piece_count
                 )
                 executor.submit(worker.start)
 
-        if len(self.result_stack) != self.torrent.piece_count:
+        if len(self.result_stack) != piece_count:
             logging.warning('Could not download file.')
             return
 
@@ -55,17 +56,15 @@ class Client:
 
     def _write_file(self, output_directory: str):
         logging.debug('Writing file ...')
-        
+
         self.result_stack.sort(key=lambda x: x.piece.piece_index)
         data_array = b''.join(result.data for result in self.result_stack)
 
-        offset = 0
         for file in self.torrent.files:
             file_directoy = os.path.join(output_directory, *file.path[:-1])
             os.makedirs(file_directoy, exist_ok=True)
             file_path = os.path.join(file_directoy, file.path[-1])
-            file_data = data_array[offset : file.size]
-            offset += file.size
+            file_data = data_array[file.start : file.start + file.size]
             with open(file_path, 'wb') as fs:
                 fs.write(file_data)
 
