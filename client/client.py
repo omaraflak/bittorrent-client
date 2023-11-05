@@ -9,10 +9,12 @@ from client.peer import Peer, PieceData
 
 
 class Client:
+    _PEERS_PER_TRACKER = 5000
+
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 50
+        max_workers: int = 1000
     ):
         self.torrent = torrent
         self.max_workers = max_workers
@@ -22,7 +24,11 @@ class Client:
 
 
     def download(self, output_directory: str):
-        trackers = Trackers(self.torrent, max_peers_per_tracker=self.max_workers * 2, peer_id=self.peer_id)
+        trackers = Trackers(
+            self.torrent,
+            max_peers_per_tracker=Client._PEERS_PER_TRACKER,
+            peer_id=self.peer_id
+        )
         peers = trackers.get_peers()
 
         self.work_queue.extend(self.torrent.pieces())

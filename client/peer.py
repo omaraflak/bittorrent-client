@@ -58,7 +58,8 @@ class Peer:
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
-        chunk_size: int = 2 ** 14
+        chunk_size: int = 2 ** 14,
+        max_batch_requests: int = 5
     ):
         self.peer = peer
         self.work_queue = work_queue
@@ -67,6 +68,7 @@ class Peer:
         self.peer_id = peer_id
         self.piece_count = piece_count
         self.chunk_size = chunk_size
+        self.max_batch_requests = max_batch_requests
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.bitfield = bytearray()
         self.chocked = True
@@ -135,7 +137,8 @@ class Peer:
 
         downloaded_data = bytearray(work.piece_size)
         downloaded_bytes = 0
-        should_request_chunk = True
+        should_request_chunks = True
+        requests_received = 0
 
         logging.debug('Start download...')
         PeerMessage(PeerMessage.UNCHOKE).write(self.sock)
@@ -151,10 +154,12 @@ class Peer:
             elif message.message_id == PeerMessage.CHOKE:
                 logging.debug('Choked!')
                 self.chocked = True
+                should_request_chunks = True
 
             elif message.message_id == PeerMessage.UNCHOKE:
                 logging.debug('Unchoked!')
                 self.chocked = False
+                should_request_chunks = True
 
             elif message.message_id == PeerMessage.INTERESTED:
                 logging.debug('_INTERESTED')
@@ -185,7 +190,10 @@ class Peer:
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
                 progress = int(100 * downloaded_bytes / work.piece_size)
-                should_request_chunk = True
+                requests_received += 1
+                if requests_received == self.max_batch_requests:
+                    should_request_chunks = True
+
                 logging.info(f'Piece #{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == work.piece_size:
@@ -210,12 +218,16 @@ class Peer:
                 self.work_queue.append(work)
                 return
 
-            if should_request_chunk and not self.chocked and self._has_piece(work.piece_index):
+            if should_request_chunks and not self.chocked and self._has_piece(work.piece_index):
                 logging.debug(f'Sending request to {self.peer.ip} for piece #{work.piece_index}...')
-                should_request_chunk = False
-                length = min(self.chunk_size, work.piece_size - downloaded_bytes)
-                payload = struct.pack('!III', work.piece_index, downloaded_bytes, length)
-                PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
+                should_request_chunks = False
+                requests_received = 0
+                tmp = downloaded_bytes
+                for _ in range(self.max_batch_requests):
+                    length = min(self.chunk_size, work.piece_size - tmp)
+                    payload = struct.pack('!III', work.piece_index, tmp, length)
+                    PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
+                    tmp += length
 
 
     def _set_has_piece(self, index: int):
