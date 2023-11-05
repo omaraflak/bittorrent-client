@@ -2,7 +2,7 @@ import os
 import random
 import logging
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor
 from client.trackers import Trackers
 from client.torrent import Torrent, Piece
 from client.peer import Peer, PieceData
@@ -12,7 +12,7 @@ class Client:
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 500
+        max_workers: int = 50
     ):
         self.torrent = torrent
         self.max_workers = max_workers
