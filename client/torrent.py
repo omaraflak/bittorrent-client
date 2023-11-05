@@ -50,8 +50,6 @@ class Piece:
 
 @dataclass
 class Torrent:
-    _SHA1_SIZE = 20
-
     name: str
     size: int
     piece_size: int
@@ -110,13 +108,13 @@ class Torrent:
         # pieces
         pieces: list[Piece] = list()
         piece_index = 0
-        for i in range(0, len(metainfo.info.pieces), Torrent._SHA1_SIZE):
+        for i in range(0, len(metainfo.info.pieces), 20):
             if i < piece_count - 1:
                 piece_size = metainfo.info.piece_length
             else:
                 piece_size = file_size - metainfo.info.piece_length * (piece_count - 1)
 
-            sha1 = metainfo.info.pieces[i : i + Torrent._SHA1_SIZE]
+            sha1 = metainfo.info.pieces[i : i + 20]
             pieces.append(Piece(piece_index, piece_size, sha1))
             piece_index += 1
     
