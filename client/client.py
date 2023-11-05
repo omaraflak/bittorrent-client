@@ -1,7 +1,8 @@
 import os
 import random
 import logging
-from collections import deque
+from typing import Optional
+from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
 from client.trackers import Trackers
 from client.torrent import Torrent, Piece
@@ -19,8 +20,9 @@ class Client:
         self.torrent = torrent
         self.max_workers = max_workers
         self.peer_id = random.randbytes(20)
-        self.work_queue: deque[Piece] = deque()
+        self.work_queue: set[Piece] = set()
         self.result_stack: list[PieceData] = list()
+        self.lock = Lock()
 
 
     def download(self, output_directory: str):
@@ -31,7 +33,7 @@ class Client:
         )
         peers = trackers.get_peers()
 
-        self.work_queue.extend(self.torrent.pieces)
+        self.work_queue.update(self.torrent.pieces)
         random.shuffle(self.work_queue)
         piece_count = len(self.work_queue)
 
@@ -55,8 +57,15 @@ class Client:
         self._write_file(output_directory)
 
 
-    def _get_work(self, bitfield: Bitfield) -> Piece:
-        return self.work_queue.popleft()
+    def _get_work(self, bitfield: Bitfield) -> Optional[Piece]:
+        with self.lock:
+            for work in self.work_queue:
+                if bitfield.size > 0:
+                    if not bitfield.has_piece(work.index):
+                        continue
+
+                self.work_queue.remove(work)
+                return work
 
 
     def _write_file(self, output_directory: str):

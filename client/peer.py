@@ -77,18 +77,23 @@ class Bitfield:
         return mask & byte > 0
 
 
+    @property
+    def size(self) -> int:
+        return len(self.value)
+
+
 class Peer:
     def __init__(
         self,
         peer: IpAndPort,
-        get_work: Callable[[Bitfield], Piece],
-        work_queue: deque[Piece],
+        get_work: Callable[[Bitfield], Optional[Piece]],
+        work_queue: set[Piece],
         result_stack: list[PieceData],
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
         chunk_size: int = 2 ** 14,
-        max_batch_requests: int = 1
+        max_batch_requests: int = 5
     ):
         self.peer = peer
         self.get_work = get_work
@@ -150,17 +155,8 @@ class Peer:
 
 
     def _download(self):
-        try:
-            work = self.get_work(self.bitfield)
-            if len(self.bitfield.value) > 0 and not self.bitfield.has_piece(work.index):
-                self.work_queue.append(work)
-                logging.warning(f'Peer {self.peer.ip} does not have piece #{work.index}, dropping work.')
-                time.sleep(5)
-                return
-        except IndexError:
-            # the work queue may be empty because all pieces are being processed
-            # however, we don't want peers to shutdown in case the peers processing
-            # the pieces fail
+        work = self.get_work(self.bitfield)
+        if not work:
             logging.warning('No work in queue')
             time.sleep(30)
             return
@@ -205,7 +201,7 @@ class Peer:
                 self.bitfield.value = bytearray(message.payload)
                 if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
-                    self.work_queue.append(work)
+                    self.work_queue.add(work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -233,12 +229,12 @@ class Peer:
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.work_queue.append(work)
+                        self.work_queue.add(work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
-                self.work_queue.append(work)
+                self.work_queue.add(work)
                 return
 
             if should_request_chunks and not self.chocked and self.bitfield.has_piece(work.index):
