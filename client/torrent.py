@@ -1,10 +1,33 @@
 import hashlib
 from urllib.parse import urlparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from dataclasses_json import DataClassJsonMixin, config
 from typing import Iterator, Optional
 from functools import cached_property
 from client.ip import IpAndPort
 from client.bencode import bencode, decode_bencode
+
+
+@dataclass
+class InfoFile(DataClassJsonMixin):
+    path: list[bytes]
+    length: int
+
+
+@dataclass
+class Info(DataClassJsonMixin):
+    name: bytes
+    pieces: bytes
+    piece_length: int = field(metadata=config(field_name='piece length'))
+    length: Optional[int] = None
+    files: Optional[list[InfoFile]] = None
+
+
+@dataclass
+class MetaInfo(DataClassJsonMixin):
+    trackers: Optional[bytes] = field(metadata=config(field_name='announce'))
+    trackers_list: Optional[list[list[bytes]]] = field(metadata=config(field_name='announce-list'))
+    info: Info
 
 
 @dataclass
@@ -24,19 +47,14 @@ class Piece:
 
 class Torrent:
     _SHA1_SIZE = 20
-    _TRACKER = 'announce'
-    _TRACKER_LIST = 'announce-list'
-    _INFO = 'info'
-    _FILE_BYTES = 'length'
-    _FILE_NAME = 'name'
-    _FILE_PIECES = 'pieces'
-    _PIECE_BYTES = 'piece length'
-    _FILES = 'files'
-    _PATH = 'path'
 
 
     def __init__(self, data: bytes):
-        self._decoded = decode_bencode(data)
+        decoded = decode_bencode(data)
+        self._metainfo = MetaInfo.from_dict(decoded)
+        hasher = hashlib.sha1()
+        hasher.update(bencode(decoded['info']))
+        self.info_hash = hasher.digest()
 
 
     def get_trackers(self, scheme: Optional[str] = 'udp') -> list[IpAndPort]:
@@ -62,61 +80,56 @@ class Torrent:
 
     @cached_property
     def trackers(self) -> list[str]:
-        if Torrent._TRACKER_LIST in self._decoded:
-            return [
-                url.decode()
-                for tier in self._decoded[Torrent._TRACKER_LIST]
-                for url in tier
-            ]
-        return [self._decoded[Torrent._TRACKER].decode()]
+        result: list[str] = list()
 
+        if self._metainfo.trackers:
+            result.append(self._metainfo.trackers.decode())
 
-    @cached_property
-    def info_hash(self) -> bytes:
-        hasher = hashlib.sha1()
-        hasher.update(bencode(self._decoded[Torrent._INFO]))
-        return hasher.digest()
+        if self._metainfo.trackers_list:
+            for tier in self._metainfo.trackers_list:
+                for url in tier:
+                    result.append(url.decode())
+
+        return result
 
 
     @cached_property
     def files(self) -> list[File]:
-        if Torrent._FILES not in self._decoded[Torrent._INFO]:
-            return File([self._decoded[Torrent._INFO][Torrent._FILE_NAME].decode()], self.file_size)
-        
+        if self._metainfo.info.length:
+            return File(0, 0, self._metainfo.info.length, [self._metainfo.info.name.decode()])
+
         result: list[File] = list()
         start = 0
-        for index, file in enumerate(self._decoded[Torrent._INFO][Torrent._FILES]):
-            paths = [path.decode() for path in file[Torrent._PATH]]
-            size = file[Torrent._FILE_BYTES]
-            result.append(File(index, start, size, paths))
-            start += size
+        for index, file in enumerate(self._metainfo.info.files):
+            paths = [path.decode() for path in file.path]
+            result.append(File(index, start, file.length, paths))
+            start += file.length
 
         return result
 
 
     @cached_property
     def file_size(self) -> int:
-        computed_size = self.piece_size * self.piece_count
-        return int(self._decoded[Torrent._INFO].get(Torrent._FILE_BYTES, computed_size))
+        return self._metainfo.info.length or sum([file.length for file in self._metainfo.info.files])
 
 
     @cached_property
     def hash_pieces(self) -> list[bytes]:
-        parts = self._decoded[Torrent._INFO][Torrent._FILE_PIECES]
+        parts = self._metainfo.info.pieces
         hashes: list[bytes] = []
         for i in range(0, len(parts), Torrent._SHA1_SIZE):
-            hashes.append(parts[i:i + Torrent._SHA1_SIZE])
+            hashes.append(parts[i : i + Torrent._SHA1_SIZE])
         return hashes
 
 
     @cached_property
     def piece_count(self) -> int:
-        return len(self._decoded[Torrent._INFO][Torrent._FILE_PIECES]) // Torrent._SHA1_SIZE
+        return len(self._metainfo.info.pieces) // Torrent._SHA1_SIZE
 
 
     @cached_property
     def piece_size(self) -> int:
-        return int(self._decoded[Torrent._INFO][Torrent._PIECE_BYTES])
+        return self._metainfo.info.piece_length
 
 
     @classmethod
