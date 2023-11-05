@@ -28,7 +28,7 @@ class PeerMessage:
     CANCEL = 8
 
     message_id: int
-    payload = bytes()
+    payload: bytes = b''
 
 
     def write(self, sock: socket.socket):
@@ -50,7 +50,7 @@ class PeerMessage:
 
 @dataclass
 class Bitfield:
-    value = bytearray()
+    value: bytearray = bytearray()
 
 
     def set_piece(self, index: int):
