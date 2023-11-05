@@ -9,7 +9,7 @@ from client.peer import Peer, PieceData
 
 
 class Client:
-    _PEERS_PER_TRACKER = 5
+    _PEERS_PER_TRACKER = 5000
 
     def __init__(
         self,
