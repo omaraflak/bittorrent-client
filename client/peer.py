@@ -33,7 +33,7 @@ class PeerMessage:
 
 
     def write(self, sock: socket.socket):
-        data = self.payload + self.message_id.to_bytes(1, 'big')
+        data = self.message_id.to_bytes(1, 'big') + self.payload
         sock.send(len(data).to_bytes(4, 'big') + data)
 
 
