@@ -83,7 +83,7 @@ class Torrent:
         metainfo = MetaInfo.from_dict(decoded)
         info_hash = Torrent.sha1(bencode(decoded['info']))
         file_size = metainfo.info.length or sum([file.length for file in metainfo.info.files])
-        piece_count = len(metainfo.info.pieces) // Torrent._SHA1_SIZE
+        piece_count = len(metainfo.info.pieces) // 20
 
         # trackers
         trackers: list[str] = list()
