@@ -6,18 +6,12 @@ import hashlib
 from typing import Optional
 from dataclasses import dataclass
 from client.ip import IpAndPort
+from client.torrent import Piece
 
 
 @dataclass
-class Work:
-    piece_index: int
-    piece_size: int
-    piece_hash: bytes
-
-
-@dataclass
-class Result:
-    index: int
+class PieceData:
+    piece: Piece
     data: bytes
 
 
@@ -60,8 +54,8 @@ class Peer:
     def __init__(
         self,
         peer: IpAndPort,
-        work_queue: list[Work],
-        result_queue: list[Result],
+        work_queue: list[Piece],
+        result_queue: list[PieceData],
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
@@ -88,6 +82,8 @@ class Peer:
         self.sock.settimeout(30)
         while len(self.result_queue) != self.piece_count:
             self._download()
+        
+        logging.debug('exiting...')
 
         self.sock.close()
         return True
@@ -191,7 +187,7 @@ class Peer:
                     logging.debug(f'expected hash: {work.piece_hash}')
                     if piece_hash == work.piece_hash:
                         logging.debug('Piece hash matches')
-                        self.result_queue.append(Result(work.piece_index, downloaded_data))
+                        self.result_queue.append(PieceData(work, downloaded_data))
                         return
                     else:
                         logging.debug('Piece corrupted!')

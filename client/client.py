@@ -3,8 +3,8 @@ import random
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from client.trackers import Trackers
-from client.torrent import Torrent
-from client.peer import Peer, Work, Result
+from client.torrent import Torrent, Piece
+from client.peer import Peer, PieceData
 
 
 class Client:
@@ -16,16 +16,15 @@ class Client:
         self.torrent = torrent
         self.max_workers = max_workers
         self.peer_id = random.randbytes(20)
-        self.work_queue: list[Work] = []
-        self.result_queue: list[Result] = []
+        self.work_queue: list[Piece] = []
+        self.result_queue: list[PieceData] = []
 
 
     def download(self, output_directory: str):
         trackers = Trackers(self.torrent, max_peers_per_tracker=10, peer_id=self.peer_id)
         peers = trackers.get_peers()
 
-        for piece in self.torrent.pieces():
-             self.work_queue.append(Work(piece.piece_index, piece.piece_size, piece.piece_hash))
+        self.work_queue.extend(self.torrent.pieces())        
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             for peer in peers:
@@ -45,7 +44,7 @@ class Client:
 
         logging.debug('Writing file ...')
         with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
-            for result in sorted(self.result_queue, key=lambda x: x.index):
+            for result in sorted(self.result_queue, key=lambda x: x.piece.piece_index):
                 file.write(result.data)
 
         logging.debug('File written to disk!')
