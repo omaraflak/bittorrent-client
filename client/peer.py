@@ -71,20 +71,22 @@ class Peer:
         self.chocked = True
 
 
-    def start(self) -> bool:
+    def start(self):
         self.sock.settimeout(5)
         if not self._connect():
             self.sock.close()
-            return False
+            return
 
         self.sock.settimeout(30)
         while len(self.result_queue) != self.piece_count:
-            self._download()
+            try:
+                self._download()
+            except socket.error as e:
+                logging.error('Socket error: %s', e)
+                return
 
-        logging.debug('exiting...')
-
+        logging.debug('Shutdown peer...')
         self.sock.close()
-        return True
 
 
     def _connect(self) -> bool:
