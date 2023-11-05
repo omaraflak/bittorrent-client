@@ -31,7 +31,7 @@ class Client:
         )
         peers = trackers.get_peers()
 
-        self.work_queue.extend(self.torrent.pieces())
+        self.work_queue.extend(self.torrent.pieces)
         random.shuffle(self.work_queue)
         piece_count = len(self.work_queue)
 

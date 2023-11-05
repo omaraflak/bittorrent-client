@@ -173,7 +173,7 @@ class Trackers:
 
     def get_peers(self) -> set[IpAndPort]:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            trackers = self.torrent.get_trackers('udp')
+            trackers = self.torrent.trackers_by_protocol('udp')
             return {
                 peer
                 for peers in executor.map(self._get_peers_from_tracker, trackers)
@@ -224,7 +224,7 @@ class Trackers:
                 self.torrent.info_hash,
                 self.peer_id,
                 0, # downloaded
-                self.torrent.file_size, # left
+                self.torrent.size, # left
                 event
             )
             sock.sendto(announce_request.to_bytes(), (tracker.ip, tracker.port))

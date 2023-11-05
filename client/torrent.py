@@ -58,7 +58,7 @@ class Torrent:
     pieces: list[Piece]
 
 
-    def trackers_by_protocol(self, protocol: Optional[str] = 'udp') -> list[IpAndPort]:
+    def trackers_by_protocol(self, protocol: Optional[str] = None) -> list[IpAndPort]:
         result: list[tuple[str, int]] = []
         for url in self.trackers:
             res = urlparse(url)
