@@ -39,7 +39,7 @@ class PeerMessage:
 
     def write(self, sock: socket.socket):
         data = self.payload + self.message_id.to_bytes(1, 'big')
-        sock.send(int.to_bytes(len(data), 'big') + data)
+        sock.send(int.to_bytes(len(data), 4, 'big') + data)
 
 
     @classmethod
@@ -99,7 +99,7 @@ class Peer:
             self.sock.connect((self.peer.ip, self.peer.port))
             logging.debug(f'Connected to {self.peer.ip}:{self.peer.port}!')
             if self._handshake():
-                logging.debug('Handshake successful!')
+                logging.info(f'Connected to {self.peer.ip}:{self.peer.port} and handshake successful!')
                 return True
             logging.error('Handshake failed')
         except socket.error as e:
@@ -121,7 +121,7 @@ class Peer:
         )
 
 
-    def _download(self) -> bool:
+    def _download(self):
         work = self.work_queue.pop()
         downloaded_data = bytearray(work.piece_size)
         downloaded_bytes = 0
@@ -166,7 +166,7 @@ class Peer:
                 if not self.has_piece[work.piece_index]:
                     logging.warning(f'Peer does not have data')
                     self.work_queue.append(work)
-                    return False
+                    return
 
             elif message.message_id == PeerMessage.REQUEST:
                 logging.debug('_REQUEST')
@@ -179,10 +179,10 @@ class Peer:
                 downloaded_bytes += len(data)
                 progress = int(100 * downloaded_bytes / work.piece_size)
                 received_chunk = True
-                logging.debug(f'piece#{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
+                logging.info(f'piece#{work.piece_index}: {downloaded_bytes}/{work.piece_size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == 0 or downloaded_bytes == work.piece_size:
-                    logging.debug(f'Received piece {work.piece_index}!')
+                    logging.info(f'Received piece {work.piece_index}!')
                     PeerMessage(PeerMessage.HAVE, int.to_bytes(index, 4, 'big')).write(self.sock)
                     hasher = hashlib.sha1()
                     hasher.update(downloaded_data)
@@ -192,16 +192,16 @@ class Peer:
                     if piece_hash == work.piece_hash:
                         logging.debug('Piece hash matches')
                         self.result_queue.append(Result(work.piece_index, downloaded_data))
-                        return True
+                        return
                     else:
                         logging.debug('Piece corrupted!')
                         self.work_queue.append(work)
-                        return False
+                        return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
                 self.work_queue.append(work)
-                return False
+                return
 
             if received_chunk and not requested_chunk and not self.chocked:
                 received_chunk = False

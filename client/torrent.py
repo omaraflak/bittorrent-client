@@ -56,7 +56,7 @@ class Torrent:
                 for tier in self._decoded[Torrent._TRACKER_LIST]
                 for url in tier
             ]
-        return self._decoded[Torrent._TRACKER]
+        return [self._decoded[Torrent._TRACKER].decode()]
 
 
     @cached_property

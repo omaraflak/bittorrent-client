@@ -21,7 +21,7 @@ class Client:
 
 
     def download(self, output_directory: str):
-        trackers = Trackers(self.torrent, peer_id=self.peer_id)
+        trackers = Trackers(self.torrent, max_peers_per_tracker=10, peer_id=self.peer_id)
         peers = trackers.get_peers()
 
         for piece in self.torrent.pieces():
@@ -38,6 +38,10 @@ class Client:
                     self.torrent.piece_count
                 )
                 executor.submit(worker.start)
+
+        if len(self.result_queue) != self.torrent.piece_count:
+            logging.warning('Could not download file.')
+            return
 
         logging.debug('Writing file ...')
         with open(os.path.join(output_directory, self.torrent.file_name), 'wb') as file:
