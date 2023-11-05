@@ -43,7 +43,7 @@ class PeerMessage:
             if len(message_size) == 0 or message_size == 0:
                 return None
             data = sock.recv(int.from_bytes(message_size, 'big'))
-            return PeerMessage(int.from_bytes(data[0], 'big'), data[1:])
+            return PeerMessage(data[0], data[1:])
         except socket.error:
             return None
 
@@ -197,7 +197,7 @@ class Peer:
                         self.result_queue.append(PieceData(work, downloaded_data))
                         return
                     else:
-                        logging.debug('Piece corrupted!')
+                        logging.warning('Piece corrupted!')
                         self.work_queue.append(work)
                         return
 
