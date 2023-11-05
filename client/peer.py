@@ -3,7 +3,6 @@ import socket
 import logging
 import struct
 import hashlib
-from collections import deque
 from typing import Optional, Callable
 from dataclasses import dataclass
 from client.ip import IpAndPort
@@ -87,7 +86,7 @@ class Peer:
         self,
         peer: IpAndPort,
         get_work: Callable[[Bitfield], Optional[Piece]],
-        work_queue: set[Piece],
+        put_work: Callable[[Piece], None],
         result_stack: list[PieceData],
         info_hash: bytes,
         peer_id: bytes,
@@ -97,7 +96,7 @@ class Peer:
     ):
         self.peer = peer
         self.get_work = get_work
-        self.work_queue = work_queue
+        self.put_work = put_work
         self.result_stack = result_stack
         self.info_hash = info_hash
         self.peer_id = peer_id
@@ -201,7 +200,7 @@ class Peer:
                 self.bitfield.value = bytearray(message.payload)
                 if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
-                    self.work_queue.add(work)
+                    self.put_work(work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -229,12 +228,12 @@ class Peer:
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.work_queue.add(work)
+                        self.put_work(work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
-                self.work_queue.add(work)
+                self.put_work(work)
                 return
 
             if should_request_chunks and not self.chocked and self.bitfield.has_piece(work.index):

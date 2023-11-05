@@ -161,14 +161,14 @@ class Trackers:
     def __init__(
         self,
         torrent: Torrent,
-        max_workers: int = 10,
-        max_peers_per_tracker: int = 100,
-        peer_id: Optional[bytes] = None
+        peer_id: bytes,
+        max_workers: int,
+        max_peers_per_tracker: int,
     ):
         self.torrent = torrent
+        self.peer_id = peer_id
         self.max_workers = max_workers
         self.max_peers_per_tracker = max_peers_per_tracker
-        self.peer_id = peer_id or random.randbytes(20)
 
 
     def get_peers(self) -> set[IpAndPort]:
