@@ -154,12 +154,10 @@ class Peer:
             elif message.message_id == PeerMessage.CHOKE:
                 logging.debug('Choked!')
                 self.chocked = True
-                should_request_chunks = True
 
             elif message.message_id == PeerMessage.UNCHOKE:
                 logging.debug('Unchoked!')
                 self.chocked = False
-                should_request_chunks = True
 
             elif message.message_id == PeerMessage.INTERESTED:
                 logging.debug('_INTERESTED')
