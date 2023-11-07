@@ -47,8 +47,7 @@ class Client:
             for peer in peers:
                 worker = Peer(
                     peer,
-                    self._get_work,
-                    self._put_work,
+                    self.work_queue,
                     self.result_stack,
                     self.torrent.info_hash,
                     self.peer_id,
@@ -63,21 +62,6 @@ class Client:
             return
 
         self._write_file(output_directory)
-
-
-    def _get_work(self, bitfield: Bitfield) -> Optional[Piece]:
-        with self.lock:
-            for work in self.work_queue:
-                if bitfield.size > 0:
-                    if not bitfield.has_piece(work.index):
-                        continue
-
-                self.work_queue.remove(work)
-                return work
-
-
-    def _put_work(self, piece: Piece):
-        self.work_queue.add(piece)
 
 
     def _write_file(self, output_directory: str):
