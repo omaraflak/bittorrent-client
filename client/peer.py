@@ -223,9 +223,9 @@ class Peer:
                 logging.debug(f'Piece #{work.index}/{self.piece_count}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == work.size:
-                    percent = int(100 * work.index / self.piece_count)
+                    percent = int(100 * work.index / len(self.result_stack))
                     if self._sha1(downloaded_data) == work.sha1:
-                        logging.info(f'Downloaded piece #{work.index}/{self.piece_count} ({percent}%).')
+                        logging.info(f'Downloaded piece #{work.index} ({percent}%).')
                         PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         self.result_stack.append(PieceData(work, downloaded_data))
                         return

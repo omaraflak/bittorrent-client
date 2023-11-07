@@ -106,17 +106,17 @@ class Torrent:
                 start += file.length
 
         # pieces
+        hashes = [
+            metainfo.info.pieces[i : i + 20]
+            for i in range(0, len(metainfo.info.pieces), 20)
+        ]
         pieces: list[Piece] = list()
-        piece_index = 0
-        for i in range(0, len(metainfo.info.pieces), 20):
+        for i in range(piece_count):
             if i < piece_count - 1:
                 piece_size = metainfo.info.piece_length
             else:
                 piece_size = file_size - metainfo.info.piece_length * (piece_count - 1)
-
-            sha1 = metainfo.info.pieces[i : i + 20]
-            pieces.append(Piece(piece_index, piece_size, sha1))
-            piece_index += 1
+            pieces.append(Piece(i, piece_size, hashes[i]))
     
         return Torrent(
             metainfo.info.name.decode(),
