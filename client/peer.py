@@ -33,7 +33,7 @@ class PeerMessage:
 
     def write(self, sock: socket.socket):
         data = self.message_id.to_bytes(1, 'big') + self.payload
-        sock.send(len(data).to_bytes(4, 'big') + data)
+        sock.sendall(len(data).to_bytes(4, 'big') + data)
 
 
     @classmethod
@@ -42,7 +42,10 @@ class PeerMessage:
             message_size = int.from_bytes(sock.recv(4), 'big')
             if message_size == 0:
                 return None
-            data = sock.recv(message_size)
+            data = bytearray()
+            while len(data) != message_size:
+                length = message_size - len(data)
+                data.extend(sock.recv(length))
             return PeerMessage(data[0], data[1:])
         except socket.error:
             return None
@@ -217,13 +220,13 @@ class Peer:
                 if requests_received == self.max_batch_requests:
                     should_request_chunks = True
 
-                logging.info(f'Piece #{work.index}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
+                logging.debug(f'Piece #{work.index}/{self.piece_count}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
 
                 if downloaded_bytes == work.size:
-                    logging.info(f'Received piece {work.index}!')
-                    PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
+                    percent = int(100 * work.index / self.piece_count)
                     if self._sha1(downloaded_data) == work.sha1:
-                        logging.debug('Piece hash matches')
+                        logging.info(f'Downloaded piece #{work.index}/{self.piece_count} ({percent}%).')
+                        PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         self.result_stack.append(PieceData(work, downloaded_data))
                         return
                     else:
@@ -233,10 +236,8 @@ class Peer:
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
-                self.put_work(work)
-                return
 
-            if should_request_chunks and not self.chocked and self.bitfield.has_piece(work.index):
+            if should_request_chunks and not self.chocked:
                 logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
                 should_request_chunks = False
                 requests_received = 0
