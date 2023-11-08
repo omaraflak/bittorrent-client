@@ -1,8 +1,8 @@
 import os
 import random
 import logging
-from typing import Optional
 from threading import Lock
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from client.trackers import Trackers
 from client.torrent import Torrent, Piece
@@ -47,8 +47,10 @@ class Client:
             for peer in peers:
                 worker = Peer(
                     peer,
-                    self.work_queue,
-                    self.result_stack,
+                    self._get_work,
+                    self._put_work,
+                    self._put_result,
+                    self._has_finished,
                     self.torrent.info_hash,
                     self.peer_id,
                     piece_count,
@@ -57,11 +59,36 @@ class Client:
                 )
                 executor.submit(worker.start)
 
-        if len(self.result_stack) != piece_count:
+        if not self._has_finished():
             logging.warning('Could not download file.')
             return
 
         self._write_file(output_directory)
+
+
+    def _get_work(self, bitfield: Bitfield) -> Optional[Piece]:
+        with self.lock:
+            for work in self.work_queue:
+                if bitfield.size > 0:
+                    if not bitfield.has_piece(work.index):
+                        continue
+
+                self.work_queue.remove(work)
+                return work
+
+
+    def _put_work(self, work: Piece):
+        self.work_queue.add(work)
+
+
+    def _put_result(self, result: PieceData):
+        self.result_stack.append(result)
+        percent = int(100 * len(self.result_stack) / self.torrent.piece_count)
+        logging.info(f'Downloaded piece {len(self.result_stack)}/{self.torrent.piece_count} ({percent}%).')
+
+
+    def _has_finished(self) -> bool:
+        return len(self.result_stack) == self.torrent.piece_count
 
 
     def _write_file(self, output_directory: str):

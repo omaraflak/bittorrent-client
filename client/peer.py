@@ -3,8 +3,7 @@ import socket
 import logging
 import struct
 import hashlib
-from threading import Lock
-from typing import Optional
+from typing import Optional, Callable
 from dataclasses import dataclass
 from client.ip import IpAndPort
 from client.torrent import Piece
@@ -40,16 +39,22 @@ class PeerMessage:
     @classmethod
     def read(cls, sock: socket.socket) -> Optional['PeerMessage']:
         try:
-            message_size = int.from_bytes(sock.recv(4), 'big')
+            message_size = int.from_bytes(PeerMessage.read_bytes(sock, 4), 'big')
             if message_size == 0:
                 return None
-            data = bytearray()
-            while len(data) != message_size:
-                length = message_size - len(data)
-                data.extend(sock.recv(length))
+            data = PeerMessage.read_bytes(sock, message_size)
             return PeerMessage(data[0], data[1:])
         except socket.error:
             return None
+
+
+    @staticmethod
+    def read_bytes(sock: socket.socket, size: int) -> bytes:
+        data = bytearray()
+        while len(data) != size:
+            length = size - len(data)
+            data.extend(sock.recv(length))
+        return bytes(data)
 
 
 @dataclass
@@ -86,14 +91,13 @@ class Bitfield:
 
 
 class Peer:
-    _LOCK = Lock()
-
-
     def __init__(
         self,
         peer: IpAndPort,
-        work_queue: set[Piece],
-        result_stack: list[PieceData],
+        get_work: Callable[[Bitfield], Optional[Piece]],
+        put_work: Callable[[Piece], None],
+        put_result: Callable[[PieceData], None],
+        has_finished: Callable[[], bool],
         info_hash: bytes,
         peer_id: bytes,
         piece_count: int,
@@ -101,8 +105,10 @@ class Peer:
         max_batch_requests: int
     ):
         self.peer = peer
-        self.work_queue = work_queue
-        self.result_stack = result_stack
+        self.get_work = get_work
+        self.put_work = put_work
+        self.put_result = put_result
+        self.has_finished = has_finished
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.piece_count = piece_count
@@ -120,7 +126,7 @@ class Peer:
             return
 
         self.sock.settimeout(30)
-        while len(self.result_stack) != self.piece_count:
+        while not self.has_finished():
             try:
                 self._download()
             except socket.error as e:
@@ -149,7 +155,7 @@ class Peer:
         handshake = header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id)
         logging.debug('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id))
         self.sock.send(handshake)
-        data = self.sock.recv(len(header) + 48)
+        data = PeerMessage.read_bytes(self.sock, len(header) + 48)
         _header, _, _info_hash, _ = struct.unpack('!20sQ20s20s', data)
         logging.debug('Recv handshake: %s', data)
         return (
@@ -159,7 +165,7 @@ class Peer:
 
 
     def _download(self):
-        work = self._get_work()
+        work = self.get_work(self.bitfield)
         if not work:
             logging.warning('No work in queue')
             time.sleep(30)
@@ -205,7 +211,7 @@ class Peer:
                 self.bitfield.value = bytearray(message.payload)
                 if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
-                    self.work_queue.add(work)
+                    self.put_work(work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -227,13 +233,11 @@ class Peer:
                 if downloaded_bytes == work.size:
                     if self._sha1(downloaded_data) == work.sha1:
                         PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
-                        self.result_stack.append(PieceData(work, downloaded_data))
-                        percent = int(100 * len(self.result_stack) / self.piece_count)
-                        logging.info(f'Downloaded piece #{work.index} ({len(self.result_stack)}/{self.piece_count}) - ({percent}%).')
+                        self.put_result(PieceData(work, downloaded_data))
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.work_queue.add(work)
+                        self.put_work(work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
@@ -249,17 +253,6 @@ class Peer:
                     payload = struct.pack('!III', work.index, tmp, length)
                     PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
                     tmp += length
-
-
-    def _get_work(self) -> Optional[Piece]:
-        with Peer._LOCK:
-            for work in self.work_queue:
-                if self.bitfield.size > 0:
-                    if not self.bitfield.has_piece(work.index):
-                        continue
-
-                self.work_queue.remove(work)
-                return work
 
 
     def _sha1(self, data: bytes) -> bytes:
