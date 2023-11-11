@@ -117,6 +117,8 @@ class Peer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.bitfield = Bitfield()
         self.chocked = True
+        self.cancel_work: Optional[Piece] = None
+        self.work: Optional[Piece] = None
 
 
     def start(self):
@@ -135,6 +137,10 @@ class Peer:
 
         logging.debug('Shutdown peer...')
         self.sock.close()
+
+
+    def cancel(self, work: Piece):
+        self.cancel_work = work
 
 
     def _connect(self) -> bool:
@@ -165,13 +171,13 @@ class Peer:
 
 
     def _download(self):
-        work = self.get_work(self.bitfield)
-        if not work:
+        self.work = self.get_work(self.bitfield)
+        if not self.work:
             logging.warning('No work in queue')
             time.sleep(30)
             return
 
-        downloaded_data = bytearray(work.size)
+        downloaded_data = bytearray(self.work.size)
         downloaded_bytes = 0
         should_request_chunks = True
         requests_received = 0
@@ -209,9 +215,9 @@ class Peer:
             elif message.message_id == PeerMessage.BITFIELD:
                 logging.debug('_BITFIELD')
                 self.bitfield.value = bytearray(message.payload)
-                if not self.bitfield.has_piece(work.index):
+                if not self.bitfield.has_piece(self.work.index):
                     logging.warning(f'Peer does not have data')
-                    self.put_work(work)
+                    self.put_work(self.work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -223,34 +229,38 @@ class Peer:
                 data = message.payload[8:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
-                progress = int(100 * downloaded_bytes / work.size)
+                progress = int(100 * downloaded_bytes / self.work.size)
                 requests_received += 1
                 if requests_received == self.max_batch_requests:
                     should_request_chunks = True
 
-                logging.debug(f'Piece #{work.index}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
+                logging.debug(f'Piece #{self.work.index}: {downloaded_bytes}/{self.work.size} bytes downloaded ({progress}%).')
 
-                if downloaded_bytes == work.size:
-                    if self._sha1(downloaded_data) == work.sha1:
-                        PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
-                        self.put_result(PieceData(work, downloaded_data))
+                if downloaded_bytes == self.work.size:
+                    if self._sha1(downloaded_data) == self.work.sha1:
+                        PeerMessage(PeerMessage.HAVE, self.work.index.to_bytes(4, 'big')).write(self.sock)
+                        self.put_result(PieceData(self.work, downloaded_data))
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.put_work(work)
+                        self.put_work(self.work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
 
+            if self.cancel_work == self.work:
+                self.cancel_work = None
+                return
+
             if should_request_chunks and not self.chocked:
-                logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
+                logging.debug(f'Sending request to {self.peer.ip} for piece #{self.work.index}...')
                 should_request_chunks = False
                 requests_received = 0
                 tmp = downloaded_bytes
                 for _ in range(self.max_batch_requests):
-                    length = min(self.chunk_size, work.size - tmp)
-                    payload = struct.pack('!III', work.index, tmp, length)
+                    length = min(self.chunk_size, self.work.size - tmp)
+                    payload = struct.pack('!III', self.work.index, tmp, length)
                     PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
                     tmp += length
 
