@@ -130,8 +130,8 @@ class Client:
         logging.debug('Writing file ...')
 
         data = b''.join(
-            result.data
-            for result in sorted(self.work_result.values(), key=lambda x: x.piece.index)
+            data
+            for _, data in sorted(self.work_result.items(), key=lambda x: x[0].index)
         )
 
         for file in self.torrent.files:
