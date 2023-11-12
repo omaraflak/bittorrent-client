@@ -32,7 +32,6 @@ class Client:
         self.end_game_peers_per_piece = end_game_peers_per_piece
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
-        self.work_pending: set[Piece] = set()
         self.work_result: dict[Piece, PieceData] = dict()
         self.workers: list[Peer] = list()
         self.workers_per_work: dict[Piece, int] = defaultdict(int)
@@ -104,7 +103,6 @@ class Client:
             if not self._end_game():
                 self.work_queue.remove(work)
 
-            self.work_pending.add(work)
             return work
 
 
@@ -116,8 +114,6 @@ class Client:
         with self.lock:
             self.work_queue.add(work)
             self.workers_per_work[work] -= 1
-            if self.workers_per_work[work] == 0:
-                self.work_pending.remove(work)
 
 
     def _put_result(self, result: PieceData):
@@ -129,14 +125,12 @@ class Client:
         with self.lock:
             if result.piece in self.work_queue:
                 self.work_queue.remove(result.piece)
-            if result.piece in self.work_pending:
-                self.work_pending.remove(result.piece)
 
         if self._end_game():
             self._cancel_piece(result.piece)
 
         percent = int(100 * len(self.work_result) / self.torrent.piece_count)
-        logging.info(f'total: {self.torrent.piece_count}, completed: {len(self.work_result)}, pending:{len(self.work_pending)} — ({percent}%).')
+        logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} — ({percent}%).')
 
 
     def _has_finished(self) -> bool:
