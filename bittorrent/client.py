@@ -5,9 +5,9 @@ from threading import Lock
 from typing import Optional
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from client.trackers import Trackers
-from client.torrent import Torrent, Piece
-from client.peer import Peer, PieceData, Bitfield
+from bittorrent.trackers import Trackers
+from bittorrent.torrent import Torrent, Piece
+from bittorrent.peer import Peer, PieceData, Bitfield
 
 
 class Client:

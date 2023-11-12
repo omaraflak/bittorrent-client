@@ -1,5 +1,5 @@
 import unittest
-from client.bencode import bencode, decode_bencode
+from bittorrent.bencode import bencode, decode_bencode
 
 
 class TestBencode(unittest.TestCase):

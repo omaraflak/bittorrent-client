@@ -5,8 +5,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from dataclasses import dataclass
-from client.ip import IpAndPort
-from client.torrent import Torrent
+from bittorrent.ip import IpAndPort
+from bittorrent.torrent import Torrent
 
 
 @dataclass

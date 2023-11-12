@@ -5,8 +5,8 @@ This is a very simple BitTorrent client.
 
 ```python
 import logging
-from client.torrent import Torrent
-from client.client import Client
+from bittorrent.torrent import Torrent
+from bittorrent.client import Client
 
 logging.basicConfig(level=logging.INFO)
 

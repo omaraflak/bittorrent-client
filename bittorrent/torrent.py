@@ -3,8 +3,8 @@ from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from dataclasses_json import DataClassJsonMixin, config
 from typing import Optional
-from client.ip import IpAndPort
-from client.bencode import bencode, decode_bencode
+from bittorrent.ip import IpAndPort
+from bittorrent.bencode import bencode, decode_bencode
 
 
 @dataclass

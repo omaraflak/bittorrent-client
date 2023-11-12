@@ -5,8 +5,8 @@ import struct
 import hashlib
 from typing import Optional, Callable
 from dataclasses import dataclass
-from client.ip import IpAndPort
-from client.torrent import Piece
+from bittorrent.ip import IpAndPort
+from bittorrent.torrent import Piece
 
 
 @dataclass
