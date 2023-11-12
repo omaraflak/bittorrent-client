@@ -214,7 +214,6 @@ class Trackers:
             connect_response = _ConnectResponse.from_bytes(sock.recv(_ConnectResponse.size()))
             if transaction_id != connect_response.transaction_id:
                 logging.error('Tracker did not return the expected transaction id')
-                sock.close()
                 return None
 
             # announce
@@ -231,14 +230,12 @@ class Trackers:
             announce_response = _AnnounceResponse.from_bytes(sock.recv(_AnnounceResponse.size(self.max_peers_per_tracker)))
             if transaction_id != announce_response.transaction_id:
                 logging.error('Tracker did not return the expected transaction id')
-                sock.close()
                 return None
 
             logging.debug('Announced to tracker successfully!')
-
-            sock.close()
             return announce_response
         except socket.error as e:
             logging.error('Announce failed: %s', e)
-            sock.close()
             return None
+        finally:
+            sock.close()

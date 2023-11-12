@@ -34,36 +34,40 @@ class PeerMessage:
 
     def write(self, sock: socket.socket):
         data = self.message_id.to_bytes(1, 'big') + self.payload
-        sock.sendall(len(data).to_bytes(4, 'big') + data)
+        data = len(data).to_bytes(4, 'big') + data
+        PeerMessage.write_bytes(sock, data)
 
 
     @classmethod
-    def read(cls, sock: socket.socket) -> Optional['PeerMessage']:
-        try:
-            message_size_bytes = PeerMessage.read_bytes(sock, 4)
-            if not message_size_bytes:
-                return None
-            message_size = int.from_bytes(message_size_bytes, 'big')
-            if message_size == 0:
-                return PeerMessage(PeerMessage.KEEP_ALIVE)
-            data = PeerMessage.read_bytes(sock, message_size)
-            if not data:
-                return None
-            return PeerMessage(data[0], data[1:])
-        except socket.error:
-            return None
+    def read(cls, sock: socket.socket) -> 'PeerMessage':
+        message_size_bytes = PeerMessage.read_bytes(sock, 4)
+        message_size = int.from_bytes(message_size_bytes, 'big')
+        if message_size == 0:
+            return PeerMessage(PeerMessage.KEEP_ALIVE)
+        data = PeerMessage.read_bytes(sock, message_size)
+        return PeerMessage(data[0], data[1:])
 
 
     @staticmethod
-    def read_bytes(sock: socket.socket, size: int) -> Optional[bytes]:
+    def read_bytes(sock: socket.socket, size: int) -> bytes:
         data = bytearray()
         while len(data) != size:
             length = size - len(data)
             tmp = sock.recv(length)
             if tmp == b'':
-                return None
+                raise RuntimeError('socket connection broken')
             data.extend(tmp)
         return bytes(data)
+
+
+    @staticmethod
+    def write_bytes(sock: socket.socket, data: bytes):
+        total_sent = 0
+        while total_sent != len(data):
+            sent = sock.send(data[total_sent:])
+            if sent == 0:
+                raise RuntimeError('socket connection broken')
+            total_sent += sent
 
 
 @dataclass
@@ -130,8 +134,8 @@ class Peer:
 
 
     def start(self):
-        self.sock.settimeout(5)
-        if not self._connect():
+        self.sock.settimeout(10)
+        if not self._connect_and_handshake():
             self.sock.close()
             return
 
@@ -139,8 +143,8 @@ class Peer:
         while not self.has_finished():
             work = self.get_work(self.bitfield)
             if not work:
-                logging.warning('No work in queue')
-                time.sleep(30)
+                logging.info('No work in queue')
+                time.sleep(10)
                 continue
 
             try:
@@ -148,7 +152,7 @@ class Peer:
             except socket.error as e:
                 logging.error('Socket error: %s', e)
                 self.put_work(work)
-                return
+                break
 
         logging.debug('Shutdown peer...')
         self.sock.close()
@@ -158,7 +162,7 @@ class Peer:
         self.cancel = True
 
 
-    def _connect(self) -> bool:
+    def _connect_and_handshake(self) -> bool:
         try:
             self.sock.connect((self.peer.ip, self.peer.port))
             logging.debug(f'Connected to {self.peer.ip}:{self.peer.port}!')
@@ -201,11 +205,7 @@ class Peer:
         while True:
             message = PeerMessage.read(self.sock)
 
-            if not message:
-                self.put_work(work)
-                return
-
-            elif message.message_id == PeerMessage.KEEP_ALIVE:
+            if message.message_id == PeerMessage.KEEP_ALIVE:
                 time.sleep(3)
 
             elif message.message_id == PeerMessage.CHOKE:
@@ -253,8 +253,8 @@ class Peer:
 
                 if downloaded_bytes == work.size:
                     if self._sha1(downloaded_data) == work.sha1:
-                        PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         self.put_result(PieceData(work, downloaded_data))
+                        PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         return
                     else:
                         logging.warning('Piece corrupted!')

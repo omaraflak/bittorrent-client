@@ -20,7 +20,7 @@ class Client:
         max_peer_batch_requests: int = 5,
         piece_chunk_size: int = 2 ** 14,
         end_game_threashold: float = 0.9,
-        end_game_peers_per_piece: int = 10
+        end_game_peers_per_piece: int = 5
     ):
         self.torrent = torrent
         self.max_peer_workers = max_peer_workers
@@ -86,17 +86,15 @@ class Client:
             ]
 
             if not candidates:
-                return None
+                candidates = [
+                    work
+                    for work, workers in self.workers_per_work.items()
+                    if len(workers) < self.end_game_peers_per_piece
+                ]
+                if not candidates:
+                    return None
 
-            candidates.sort(key=lambda x: len(self.workers_per_work[x]))
-            candidates = [
-                work
-                for work in candidates
-                if len(self.workers_per_work[work]) == len(self.workers_per_work[candidates[0]])
-            ]
-            random.shuffle(candidates)
-
-            work = candidates[0]
+            work = random.choice(candidates)
             self.workers_per_work[work].append(peer)
 
             if not self._end_game():
@@ -126,7 +124,7 @@ class Client:
                     if worker != peer:
                         worker.cancel()
 
-            self.workers_per_work[result.piece].clear()
+            del self.workers_per_work[result.piece]
 
             percent = int(100 * len(self.work_result) / self.torrent.piece_count)
             logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} ({percent}%)')
