@@ -265,6 +265,7 @@ class Peer:
                 logging.debug('_CANCEL')
 
             if self.cancel:
+                self.cancel = False
                 return
 
             if should_request_chunks and not self.choked:
