@@ -135,10 +135,8 @@ class Client:
         if self._end_game():
             self._cancel_piece(result.piece)
 
-        logging.info(f'Completed {result.piece.index}')
-
         percent = int(100 * len(self.work_result) / self.torrent.piece_count)
-        logging.info(f'Downloaded piece {len(self.work_result)}/{self.torrent.piece_count} ({percent}%).')
+        logging.info(f'total: {self.torrent.piece_count}, completed: {len(self.work_result)}, pending:{len(self.work_pending)} — ({percent}%).')
 
 
     def _has_finished(self) -> bool:

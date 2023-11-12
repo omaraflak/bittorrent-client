@@ -17,6 +17,7 @@ class PieceData:
 
 @dataclass
 class PeerMessage:
+    KEEP_ALIVE = -1
     CHOKE = 0
     UNCHOKE = 1
     INTERESTED = 2
@@ -39,21 +40,29 @@ class PeerMessage:
     @classmethod
     def read(cls, sock: socket.socket) -> Optional['PeerMessage']:
         try:
-            message_size = int.from_bytes(PeerMessage.read_bytes(sock, 4), 'big')
-            if message_size == 0:
+            message_size_bytes = PeerMessage.read_bytes(sock, 4)
+            if not message_size_bytes:
                 return None
+            message_size = int.from_bytes(message_size_bytes, 'big')
+            if message_size == 0:
+                return PeerMessage(PeerMessage.KEEP_ALIVE)
             data = PeerMessage.read_bytes(sock, message_size)
+            if not data:
+                return None
             return PeerMessage(data[0], data[1:])
         except socket.error:
             return None
 
 
     @staticmethod
-    def read_bytes(sock: socket.socket, size: int) -> bytes:
+    def read_bytes(sock: socket.socket, size: int) -> Optional[bytes]:
         data = bytearray()
         while len(data) != size:
             length = size - len(data)
-            data.extend(sock.recv(length))
+            tmp = sock.recv(length)
+            if tmp == b'':
+                return None
+            data.extend(tmp)
         return bytes(data)
 
 
@@ -118,7 +127,6 @@ class Peer:
         self.bitfield = Bitfield()
         self.chocked = True
         self.cancel_work: Optional[Piece] = None
-        self.work: Optional[Piece] = None
 
 
     def start(self):
@@ -129,10 +137,17 @@ class Peer:
 
         self.sock.settimeout(30)
         while not self.has_finished():
+            work = self.get_work(self.bitfield)
+            if not work:
+                logging.warning('No work in queue')
+                time.sleep(30)
+                continue
+
             try:
-                self._download()
+                self._download(work)
             except socket.error as e:
                 logging.error('Socket error: %s', e)
+                self.put_work(work)
                 return
 
         logging.debug('Shutdown peer...')
@@ -162,6 +177,9 @@ class Peer:
         logging.debug('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id))
         self.sock.send(handshake)
         data = PeerMessage.read_bytes(self.sock, len(header) + 48)
+        if not data:
+            return False
+
         _header, _, _info_hash, _ = struct.unpack('!20sQ20s20s', data)
         logging.debug('Recv handshake: %s', data)
         return (
@@ -170,14 +188,8 @@ class Peer:
         )
 
 
-    def _download(self):
-        self.work = self.get_work(self.bitfield)
-        if not self.work:
-            logging.warning('No work in queue')
-            time.sleep(30)
-            return
-
-        downloaded_data = bytearray(self.work.size)
+    def _download(self, work: Piece):
+        downloaded_data = bytearray(work.size)
         downloaded_bytes = 0
         should_request_chunks = True
         requests_received = 0
@@ -190,7 +202,10 @@ class Peer:
             message = PeerMessage.read(self.sock)
 
             if not message:
-                # keep alive
+                self.put_work(work)
+                return
+
+            elif message.message_id == PeerMessage.KEEP_ALIVE:
                 time.sleep(3)
 
             elif message.message_id == PeerMessage.CHOKE:
@@ -215,9 +230,9 @@ class Peer:
             elif message.message_id == PeerMessage.BITFIELD:
                 logging.debug('_BITFIELD')
                 self.bitfield.value = bytearray(message.payload)
-                if not self.bitfield.has_piece(self.work.index):
+                if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
-                    self.put_work(self.work)
+                    self.put_work(work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -229,38 +244,38 @@ class Peer:
                 data = message.payload[8:]
                 downloaded_data[start : start + len(data)] = data
                 downloaded_bytes += len(data)
-                progress = int(100 * downloaded_bytes / self.work.size)
+                progress = int(100 * downloaded_bytes / work.size)
                 requests_received += 1
                 if requests_received == self.max_batch_requests:
                     should_request_chunks = True
 
-                logging.debug(f'Piece #{self.work.index}: {downloaded_bytes}/{self.work.size} bytes downloaded ({progress}%).')
+                logging.debug(f'Piece #{work.index}: {downloaded_bytes}/{work.size} bytes downloaded ({progress}%).')
 
-                if downloaded_bytes == self.work.size:
-                    if self._sha1(downloaded_data) == self.work.sha1:
-                        PeerMessage(PeerMessage.HAVE, self.work.index.to_bytes(4, 'big')).write(self.sock)
-                        self.put_result(PieceData(self.work, downloaded_data))
+                if downloaded_bytes == work.size:
+                    if self._sha1(downloaded_data) == work.sha1:
+                        PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
+                        self.put_result(PieceData(work, downloaded_data))
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.put_work(self.work)
+                        self.put_work(work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
 
-            if self.cancel_work == self.work:
+            if self.cancel_work == work:
                 self.cancel_work = None
                 return
 
             if should_request_chunks and not self.chocked:
-                logging.debug(f'Sending request to {self.peer.ip} for piece #{self.work.index}...')
+                logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
                 should_request_chunks = False
                 requests_received = 0
                 tmp = downloaded_bytes
                 for _ in range(self.max_batch_requests):
-                    length = min(self.chunk_size, self.work.size - tmp)
-                    payload = struct.pack('!III', self.work.index, tmp, length)
+                    length = min(self.chunk_size, work.size - tmp)
+                    payload = struct.pack('!III', work.index, tmp, length)
                     PeerMessage(PeerMessage.REQUEST, payload).write(self.sock)
                     tmp += length
 
