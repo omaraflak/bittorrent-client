@@ -59,7 +59,7 @@ class Client:
                         self._has_finished,
                         self.torrent.info_hash,
                         self.peer_id,
-                        len(self.work_queue),
+                        self.torrent.piece_count,
                         self.piece_chunk_size,
                         self.max_peer_batch_requests
                     )
