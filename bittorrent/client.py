@@ -68,7 +68,7 @@ class Client:
             )
 
         if not self._has_finished():
-            logging.warning('Could not download file.')
+            logging.error('Could not download file.')
             return
 
         self._write_file(output_directory)
@@ -152,4 +152,4 @@ class Client:
             with open(file_path, 'wb') as fs:
                 fs.write(file_data)
 
-        logging.debug('File written to disk!')
+        logging.info('File written to disk!')
