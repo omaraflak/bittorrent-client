@@ -10,12 +10,6 @@ from bittorrent.torrent import Piece
 
 
 @dataclass
-class PieceData:
-    piece: Piece
-    data: bytes
-
-
-@dataclass
 class PeerMessage:
     KEEP_ALIVE = -1
     CHOKE = 0
@@ -109,7 +103,7 @@ class Peer:
         peer: IpAndPort,
         get_work: Callable[[Bitfield], Optional[Piece]],
         put_work: Callable[[Piece], None],
-        put_result: Callable[[PieceData], None],
+        put_result: Callable[[Piece, bytes], None],
         has_finished: Callable[[], bool],
         info_hash: bytes,
         peer_id: bytes,
@@ -253,7 +247,7 @@ class Peer:
 
                 if downloaded_bytes == work.size:
                     if self._sha1(downloaded_data) == work.sha1:
-                        self.put_result(PieceData(work, downloaded_data))
+                        self.put_result(work, downloaded_data)
                         PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         return
                     else:

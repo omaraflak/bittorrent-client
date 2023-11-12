@@ -7,7 +7,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from bittorrent.trackers import Trackers
 from bittorrent.torrent import Torrent, Piece
-from bittorrent.peer import Peer, PieceData, Bitfield
+from bittorrent.peer import Peer, Bitfield
 
 
 class Client:
@@ -53,7 +53,7 @@ class Client:
                         peer,
                         lambda bitfield: self._get_work(peer, bitfield),
                         lambda work: self._put_work(peer, work),
-                        lambda result: self._put_result(peer, result),
+                        lambda piece, data: self._put_result(peer, piece, data),
                         self._has_finished,
                         self.torrent.info_hash,
                         self.peer_id,
@@ -106,17 +106,17 @@ class Client:
             self.workers_per_work[work].remove(peer)
 
 
-    def _put_result(self, peer: Peer, result: PieceData):
+    def _put_result(self, peer: Peer, piece: Piece, data: bytes):
         with self.lock:
-            self.work_result[result.piece] = result
-            if result.piece in self.work_queue:
-                self.work_queue.remove(result.piece)
+            self.work_result[piece] = data
+            if piece in self.work_queue:
+                self.work_queue.remove(piece)
 
-            for worker in self.workers_per_work[result.piece]:
+            for worker in self.workers_per_work[piece]:
                 if worker != peer:
                     worker.cancel()
 
-            del self.workers_per_work[result.piece]
+            del self.workers_per_work[piece]
 
             percent = int(100 * len(self.work_result) / self.torrent.piece_count)
             logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} ({percent}%)')
