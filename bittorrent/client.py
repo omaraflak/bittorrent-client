@@ -30,7 +30,7 @@ class Client:
         self.max_peers_per_piece = max_peers_per_piece
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
-        self.work_result: dict[Piece, PieceData] = dict()
+        self.work_result: dict[Piece, bytes] = dict()
         self.workers_per_work: dict[Piece, list[Peer]] = defaultdict(list)
         self.lock = Lock()
 
