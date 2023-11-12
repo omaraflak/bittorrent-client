@@ -17,10 +17,9 @@ class Client:
         max_peer_workers: int = 1000,
         max_tracker_workers: int = 100,
         max_peers_per_tracker: int = 5000,
+        max_peers_per_piece: int = 5,
         max_peer_batch_requests: int = 5,
-        piece_chunk_size: int = 2 ** 14,
-        end_game_threashold: float = 0.9,
-        end_game_peers_per_piece: int = 5
+        piece_chunk_size: int = 2 ** 14
     ):
         self.torrent = torrent
         self.max_peer_workers = max_peer_workers
@@ -28,8 +27,7 @@ class Client:
         self.max_tracker_workers = max_tracker_workers
         self.max_peers_per_tracker = max_peers_per_tracker
         self.piece_chunk_size = piece_chunk_size
-        self.end_game_threashold = end_game_threashold
-        self.end_game_peers_per_piece = end_game_peers_per_piece
+        self.max_peers_per_piece = max_peers_per_piece
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
         self.work_result: dict[Piece, PieceData] = dict()
@@ -81,7 +79,7 @@ class Client:
                 for work in self.work_queue
                 if (
                     (bitfield.size == 0 or bitfield.has_piece(work.index)) and
-                    len(self.workers_per_work[work]) < self.end_game_peers_per_piece
+                    len(self.workers_per_work[work]) < self.max_peers_per_piece
                 )
             ]
 
@@ -89,22 +87,17 @@ class Client:
                 candidates = [
                     work
                     for work, workers in self.workers_per_work.items()
-                    if len(workers) < self.end_game_peers_per_piece
+                    if len(workers) < self.max_peers_per_piece
                 ]
                 if not candidates:
                     return None
 
             work = random.choice(candidates)
             self.workers_per_work[work].append(peer)
-
-            if not self._end_game():
+            if work in self.work_queue:
                 self.work_queue.remove(work)
 
             return work
-
-
-    def _end_game(self) -> bool:
-        return len(self.work_result) >= self.end_game_threashold * self.torrent.piece_count
 
 
     def _put_work(self, peer: Peer, work: Piece):
@@ -119,10 +112,9 @@ class Client:
             if result.piece in self.work_queue:
                 self.work_queue.remove(result.piece)
 
-            if self._end_game():
-                for worker in self.workers_per_work[result.piece]:
-                    if worker != peer:
-                        worker.cancel()
+            for worker in self.workers_per_work[result.piece]:
+                if worker != peer:
+                    worker.cancel()
 
             del self.workers_per_work[result.piece]
 
