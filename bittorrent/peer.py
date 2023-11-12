@@ -125,7 +125,7 @@ class Peer:
         self.max_batch_requests = max_batch_requests
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.bitfield = Bitfield()
-        self.chocked = True
+        self.choked = True
         self.cancel_work: Optional[Piece] = None
 
 
@@ -210,11 +210,11 @@ class Peer:
 
             elif message.message_id == PeerMessage.CHOKE:
                 logging.debug('Choked!')
-                self.chocked = True
+                self.choked = True
 
             elif message.message_id == PeerMessage.UNCHOKE:
                 logging.debug('Unchoked!')
-                self.chocked = False
+                self.choked = False
 
             elif message.message_id == PeerMessage.INTERESTED:
                 logging.debug('_INTERESTED')
@@ -268,7 +268,7 @@ class Peer:
                 self.cancel_work = None
                 return
 
-            if should_request_chunks and not self.chocked:
+            if should_request_chunks and not self.choked:
                 logging.debug(f'Sending request to {self.peer.ip} for piece #{work.index}...')
                 should_request_chunks = False
                 requests_received = 0
