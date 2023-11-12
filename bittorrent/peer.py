@@ -126,7 +126,7 @@ class Peer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.bitfield = Bitfield()
         self.choked = True
-        self.cancel_work: Optional[Piece] = None
+        self.cancel = False
 
 
     def start(self):
@@ -154,8 +154,8 @@ class Peer:
         self.sock.close()
 
 
-    def cancel(self, work: Piece):
-        self.cancel_work = work
+    def cancel_work(self):
+        self.cancel = True
 
 
     def _connect(self) -> bool:
@@ -264,8 +264,7 @@ class Peer:
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
 
-            if self.cancel_work == work:
-                self.cancel_work = None
+            if self.cancel:
                 return
 
             if should_request_chunks and not self.choked:

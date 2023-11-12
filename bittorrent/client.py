@@ -34,7 +34,7 @@ class Client:
         self.work_queue: set[Piece] = set()
         self.work_result: dict[Piece, PieceData] = dict()
         self.workers: list[Peer] = list()
-        self.workers_per_work: dict[Piece, int] = defaultdict(int)
+        self.workers_per_work: dict[Piece, list[Peer]] = defaultdict(list)
         self.lock = Lock()
 
 
@@ -52,9 +52,9 @@ class Client:
         self.workers.extend(
             Peer(
                 peer,
-                self._get_work,
-                self._put_work,
-                self._put_result,
+                lambda bitfield: self._get_work(peer, bitfield),
+                lambda work: self._put_work(peer, work),
+                lambda result: self._put_result(peer, result),
                 self._has_finished,
                 self.torrent.info_hash,
                 self.peer_id,
@@ -75,30 +75,30 @@ class Client:
         self._write_file(output_directory)
 
 
-    def _get_work(self, bitfield: Bitfield) -> Optional[Piece]:
+    def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
         with self.lock:
             candidates = [
                 work
                 for work in self.work_queue
                 if (
                     (bitfield.size == 0 or bitfield.has_piece(work.index)) and
-                    self.workers_per_work[work] < self.end_game_peers_per_piece
+                    len(self.workers_per_work[work]) < self.end_game_peers_per_piece
                 )
             ]
 
             if not candidates:
                 return None
 
-            candidates.sort(key=lambda x: self.workers_per_work[x])
+            candidates.sort(key=lambda x: len(self.workers_per_work[x]))
             candidates = [
                 work
                 for work in candidates
-                if self.workers_per_work[work] == self.workers_per_work[candidates[0]]
+                if len(self.workers_per_work[work]) == len(self.workers_per_work[candidates[0]])
             ]
             random.shuffle(candidates)
 
             work = candidates[0]
-            self.workers_per_work[work] += 1
+            self.workers_per_work[work].append(peer)
 
             if not self._end_game():
                 self.work_queue.remove(work)
@@ -110,37 +110,31 @@ class Client:
         return len(self.work_result) >= self.end_game_threashold * self.torrent.piece_count
 
 
-    def _put_work(self, work: Piece):
+    def _put_work(self, peer: Peer, work: Piece):
         with self.lock:
             self.work_queue.add(work)
-            self.workers_per_work[work] -= 1
+            self.workers_per_work[work].remove(peer)
 
 
-    def _put_result(self, result: PieceData):
-        if result.piece in self.work_result:
-            return
-
-        self.work_result[result.piece] = result
-        self.workers_per_work[result.piece] = 0
+    def _put_result(self, peer: Peer, result: PieceData):
         with self.lock:
+            self.work_result[result.piece] = result
             if result.piece in self.work_queue:
                 self.work_queue.remove(result.piece)
 
-        if self._end_game():
-            self._cancel_piece(result.piece)
+            if self._end_game():
+                for worker in self.workers_per_work[result.piece]:
+                    if worker != peer:
+                        worker.cancel()
 
-        percent = int(100 * len(self.work_result) / self.torrent.piece_count)
-        logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} — ({percent}%).')
+            self.workers_per_work[result.piece].clear()
+
+            percent = int(100 * len(self.work_result) / self.torrent.piece_count)
+            logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} ({percent}%)')
 
 
     def _has_finished(self) -> bool:
         return len(self.work_result) == self.torrent.piece_count
-
-
-    def _cancel_piece(self, piece: Piece):
-        with self.lock:
-            for worker in self.workers:
-                worker.cancel(piece)
 
 
     def _write_file(self, output_directory: str):
