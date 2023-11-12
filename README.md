@@ -1,6 +1,6 @@
-# Bittorrent Client
+# BitTorrent Client
 
-This is a very simplistic bittorrent client.
+This is a very simple BitTorrent client.
 
 
 ```python
