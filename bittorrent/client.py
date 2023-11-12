@@ -33,7 +33,6 @@ class Client:
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
         self.work_result: dict[Piece, PieceData] = dict()
-        self.workers: list[Peer] = list()
         self.workers_per_work: dict[Piece, list[Peer]] = defaultdict(list)
         self.lock = Lock()
 
@@ -43,30 +42,30 @@ class Client:
             self.torrent,
             self.peer_id,
             self.max_tracker_workers,
-            self.max_peers_per_tracker,
+            self.max_peers_per_tracker
         )
         peers = trackers.get_peers()
-
         self.work_queue.update(self.torrent.pieces)
-        piece_count = len(self.work_queue)
-        self.workers.extend(
-            Peer(
-                peer,
-                lambda bitfield: self._get_work(peer, bitfield),
-                lambda work: self._put_work(peer, work),
-                lambda result: self._put_result(peer, result),
-                self._has_finished,
-                self.torrent.info_hash,
-                self.peer_id,
-                piece_count,
-                self.piece_chunk_size,
-                self.max_peer_batch_requests
-            )
-            for peer in peers
-        )
 
         with ThreadPoolExecutor(max_workers=self.max_peer_workers) as executor:
-            executor.map(Peer.start, self.workers)
+            executor.map(
+                Peer.start,
+                [
+                    Peer(
+                        peer,
+                        lambda bitfield: self._get_work(peer, bitfield),
+                        lambda work: self._put_work(peer, work),
+                        lambda result: self._put_result(peer, result),
+                        self._has_finished,
+                        self.torrent.info_hash,
+                        self.peer_id,
+                        len(self.work_queue),
+                        self.piece_chunk_size,
+                        self.max_peer_batch_requests
+                    )
+                    for peer in peers
+                ]
+            )
 
         if not self._has_finished():
             logging.warning('Could not download file.')
