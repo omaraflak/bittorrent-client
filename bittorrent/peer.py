@@ -121,13 +121,13 @@ class Peer:
         self.piece_count = piece_count
         self.chunk_size = chunk_size
         self.max_batch_requests = max_batch_requests
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.bitfield = Bitfield()
         self.choked = True
         self.cancel = False
 
 
     def start(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(10)
         if not self._connect_and_handshake():
             self.sock.close()
