@@ -157,6 +157,7 @@ class Client:
 
 
     def _assemble_file(self, file: File, output: str):
+        logging.info(f'Assembling {os.path.basename(output)}...')
         piece_size = self.torrent.piece_size
         start_index = file.start // piece_size
         start_offset = file.start % piece_size
