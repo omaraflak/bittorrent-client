@@ -150,6 +150,8 @@ class Client:
             os.makedirs(file_directoy, exist_ok=True)
             file_path = os.path.join(file_directoy, file.path[-1])
             self._assemble_file(file, file_path)
+
+        os.rmdir(self.tmp)
         logging.info('Files written to disk!')
 
 
