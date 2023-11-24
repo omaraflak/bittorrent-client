@@ -1,4 +1,5 @@
 import os
+import math
 import random
 import logging
 from threading import Lock
@@ -6,11 +7,13 @@ from typing import Optional
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from bittorrent.trackers import Trackers
-from bittorrent.torrent import Torrent, Piece
+from bittorrent.torrent import Torrent, Piece, File
 from bittorrent.peer import Peer, Bitfield
 
 
 class Client:
+    _TMP = '.tmp'
+
     def __init__(
         self,
         torrent: Torrent,
@@ -30,7 +33,7 @@ class Client:
         self.max_peers_per_piece = max_peers_per_piece
         self.peer_id = random.randbytes(20)
         self.work_queue: set[Piece] = set()
-        self.work_result: dict[Piece, bytes] = dict()
+        self.work_done: set[Piece] = set()
         self.workers_per_work: dict[Piece, list[Peer]] = defaultdict(list)
         self.lock = Lock()
 
@@ -43,7 +46,10 @@ class Client:
             self.max_peers_per_tracker
         )
         peers = trackers.get_peers()
-        self.work_queue.update(self.torrent.pieces)
+
+        self.tmp = os.path.join(output_directory, Client._TMP)
+        os.makedirs(self.tmp, exist_ok=True)
+        self._read_downloaded_parts()
 
         with ThreadPoolExecutor(max_workers=self.max_peer_workers) as executor:
             executor.map(
@@ -69,7 +75,7 @@ class Client:
             logging.error('Could not download file.')
             return
 
-        self._write_file(output_directory)
+        self._write_files(output_directory)
 
 
     def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
@@ -108,7 +114,6 @@ class Client:
 
     def _put_result(self, peer: Peer, piece: Piece, data: bytes):
         with self.lock:
-            self.work_result[piece] = data
             if piece in self.work_queue:
                 self.work_queue.remove(piece)
 
@@ -118,28 +123,55 @@ class Client:
 
             del self.workers_per_work[piece]
 
-            percent = int(100 * len(self.work_result) / self.torrent.piece_count)
-            logging.info(f'Progress: {len(self.work_result)}/{self.torrent.piece_count} ({percent}%)')
+            self.work_done.add(piece)
+            percent = int(100 * len(self.work_done) / self.torrent.piece_count)
+            logging.info(f'Progress: {len(self.work_done)}/{self.torrent.piece_count} ({percent}%)')
+        
+        filepath = os.path.join(self.tmp, piece.sha1.hex())
+        with open(filepath, 'wb') as file:
+            file.write(data)
 
 
     def _has_finished(self) -> bool:
-        return len(self.work_result) == self.torrent.piece_count
+        return len(self.work_done) == self.torrent.piece_count
 
 
-    def _write_file(self, output_directory: str):
-        logging.debug('Writing file ...')
+    def _read_downloaded_parts(self):
+        parts_downloaded = {os.path.basename(path) for path in os.listdir(self.tmp)}
+        for piece in self.torrent.pieces:
+            if piece.sha1.hex() in parts_downloaded:
+                self.work_done.add(piece)
+            else:
+                self.work_queue.add(piece)
 
-        data = b''.join(
-            data
-            for _, data in sorted(self.work_result.items(), key=lambda x: x[0].index)
-        )
+
+    def _write_files(self, output_directory: str):
+        logging.debug('Writing files...')
 
         for file in self.torrent.files:
             file_directoy = os.path.join(output_directory, *file.path[:-1])
             os.makedirs(file_directoy, exist_ok=True)
             file_path = os.path.join(file_directoy, file.path[-1])
-            file_data = data[file.start : file.start + file.size]
-            with open(file_path, 'wb') as fs:
-                fs.write(file_data)
+            self._write_file(file, file_path)
 
-        logging.info('File written to disk!')
+        logging.info('Files written to disk!')
+
+
+    def _write_file(self, file: File, path: str):
+        piece_size = self.torrent.piece_size
+        start_index = file.start // piece_size
+        start_offset = file.start % piece_size
+
+        written = 0
+        with open(path, 'wb') as f:
+            for piece in self.torrent.pieces[start_index:]:
+                part_path = os.path.join(self.tmp, piece.sha1.hex())
+                with open(part_path, 'rb') as part:
+                    data = part.read()
+                    if piece.index == start_index:
+                        written += f.write(data[start_offset:])
+                    else:
+                        rest = min(piece_size, file.size - written)
+                        written += f.write(data[:rest])
+                        if rest < piece_size:
+                            return
