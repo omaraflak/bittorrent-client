@@ -19,7 +19,7 @@ class Client:
         max_tracker_workers: int = 100,
         max_peers_per_tracker: int = 5000,
         max_peers_per_piece: int = 5,
-        max_peer_batch_requests: int = 10,
+        max_peer_batch_requests: int = 30,
         piece_chunk_size: int = 2 ** 14
     ):
         self.torrent = torrent
