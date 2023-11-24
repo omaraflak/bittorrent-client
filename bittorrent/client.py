@@ -12,8 +12,6 @@ from bittorrent.peer import Peer, Bitfield
 
 
 class Client:
-    _TMP = '.tmp'
-
     def __init__(
         self,
         torrent: Torrent,
@@ -47,7 +45,8 @@ class Client:
         )
         peers = trackers.get_peers()
 
-        self.tmp = os.path.join(output_directory, Client._TMP)
+        files_directory = os.path.join(output_directory, self.torrent.name)
+        self.tmp = os.path.join(files_directory, '.tmp')
         os.makedirs(self.tmp, exist_ok=True)
         self._read_downloaded_parts()
 
@@ -75,7 +74,7 @@ class Client:
             logging.error('Could not download file.')
             return
 
-        self._write_files(os.path.join(output_directory, self.torrent.name))
+        self._write_files(files_directory)
 
 
     def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
