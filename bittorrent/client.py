@@ -124,7 +124,8 @@ class Client:
 
             self.work_done.add(piece)
             percent = int(100 * len(self.work_done) / self.torrent.piece_count)
-            logging.info(f'Progress: {len(self.work_done)}/{self.torrent.piece_count} ({percent}%)')
+            human = Client._human_friendly_bytes_str(len(self.work_done) * self.torrent.piece_size)
+            logging.info(f'Progress: {len(self.work_done)}/{self.torrent.piece_count} ({percent}%) {human}')
         
         filepath = os.path.join(self.tmp, piece.sha1.hex())
         with open(filepath, 'wb') as file:
@@ -173,3 +174,15 @@ class Client:
                         written += f.write(data[:rest])
                         if rest < piece_size:
                             return
+
+
+    @staticmethod
+    def _human_friendly_bytes_str(size: int) -> str:
+        if size < 1e6:
+            return f'{size // 1e3}KB'
+        if size < 1e9:
+            return f'{size / 1e6:.1f}MB'
+        if size < 1e12:
+            return f'{size / 1e9:.1f}GB'
+
+        return 'wtf are you downloading?'
