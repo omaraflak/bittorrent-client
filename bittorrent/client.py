@@ -21,7 +21,7 @@ class Client:
         max_tracker_workers: int = 100,
         max_peers_per_tracker: int = 5000,
         max_peers_per_piece: int = 5,
-        max_peer_batch_requests: int = 5,
+        max_peer_batch_requests: int = 10,
         piece_chunk_size: int = 2 ** 14
     ):
         self.torrent = torrent
@@ -75,7 +75,7 @@ class Client:
             logging.error('Could not download file.')
             return
 
-        self._write_files(output_directory)
+        self._write_files(os.path.join(output_directory, self.torrent.name))
 
 
     def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
@@ -146,24 +146,21 @@ class Client:
 
 
     def _write_files(self, output_directory: str):
-        logging.debug('Writing files...')
-
         for file in self.torrent.files:
             file_directoy = os.path.join(output_directory, *file.path[:-1])
             os.makedirs(file_directoy, exist_ok=True)
             file_path = os.path.join(file_directoy, file.path[-1])
-            self._write_file(file, file_path)
-
+            self._assemble_file(file, file_path)
         logging.info('Files written to disk!')
 
 
-    def _write_file(self, file: File, path: str):
+    def _assemble_file(self, file: File, output: str):
         piece_size = self.torrent.piece_size
         start_index = file.start // piece_size
         start_offset = file.start % piece_size
 
         written = 0
-        with open(path, 'wb') as f:
+        with open(output, 'wb') as f:
             for piece in self.torrent.pieces[start_index:]:
                 part_path = os.path.join(self.tmp, piece.sha1.hex())
                 with open(part_path, 'rb') as part:
