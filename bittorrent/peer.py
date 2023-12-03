@@ -4,7 +4,7 @@ import logging
 import struct
 import hashlib
 from typing import Optional, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from bittorrent.ip import IpAndPort
 from bittorrent.torrent import Piece
 
@@ -66,7 +66,7 @@ class PeerMessage:
 
 @dataclass
 class Bitfield:
-    value: bytearray = bytearray()
+    value: bytearray = field(default_factory=bytearray)
 
 
     def set_piece(self, index: int):
