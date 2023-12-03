@@ -1,8 +1,8 @@
 import time
 import socket
-import logging
 import struct
 import hashlib
+import logging
 from typing import Optional, Callable
 from dataclasses import dataclass, field
 from bittorrent.ip import IpAndPort
@@ -56,12 +56,7 @@ class PeerMessage:
 
     @staticmethod
     def write_bytes(sock: socket.socket, data: bytes):
-        total_sent = 0
-        while total_sent != len(data):
-            sent = sock.send(data[total_sent:])
-            if sent == 0:
-                raise RuntimeError('socket connection broken')
-            total_sent += sent
+        sock.sendall(data)
 
 
 @dataclass
@@ -173,7 +168,7 @@ class Peer:
         header = struct.pack('!b', 19) + b'BitTorrent protocol'
         handshake = header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id)
         logging.debug('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id))
-        self.sock.send(handshake)
+        PeerMessage.write_bytes(self.sock, handshake)
         data = PeerMessage.read_bytes(self.sock, len(header) + 48)
         if not data:
             return False
