@@ -1,12 +1,18 @@
 import time
 import socket
 import struct
+import select
 import hashlib
 import logging
 from typing import Optional, Callable
 from dataclasses import dataclass, field
 from bittorrent.ip import IpAndPort
 from bittorrent.torrent import Piece
+
+
+@dataclass
+class Cancelable:
+    cancel: bool = False
 
 
 @dataclass
@@ -33,19 +39,23 @@ class PeerMessage:
 
 
     @classmethod
-    def read(cls, sock: socket.socket) -> 'PeerMessage':
-        message_size_bytes = PeerMessage.read_bytes(sock, 4)
+    def read(cls, sock: socket.socket, cancelable: Optional[Cancelable] = None) -> 'PeerMessage':
+        message_size_bytes = PeerMessage.read_bytes(sock, 4, cancelable)
         message_size = int.from_bytes(message_size_bytes, 'big')
         if message_size == 0:
             return PeerMessage(PeerMessage.KEEP_ALIVE)
-        data = PeerMessage.read_bytes(sock, message_size)
+        data = PeerMessage.read_bytes(sock, message_size, cancelable)
         return PeerMessage(data[0], data[1:])
 
 
     @staticmethod
-    def read_bytes(sock: socket.socket, size: int) -> bytes:
+    def read_bytes(sock: socket.socket, size: int, cancelable: Optional[Cancelable] = None) -> bytes:
         data = bytearray()
         while len(data) != size:
+            if not PeerMessage._has_data(sock):
+                continue
+            if cancelable and cancelable.cancel:
+                return b''
             length = size - len(data)
             tmp = sock.recv(length)
             if tmp == b'':
@@ -57,6 +67,12 @@ class PeerMessage:
     @staticmethod
     def write_bytes(sock: socket.socket, data: bytes):
         sock.sendall(data)
+
+
+    @staticmethod
+    def _has_data(sock: socket.socket) -> bool:
+        r, _, _ = select.select([sock], [], [])
+        return len(r) > 0
 
 
 @dataclass
@@ -96,9 +112,9 @@ class Peer:
     def __init__(
         self,
         peer: IpAndPort,
-        get_work: Callable[[Bitfield], Optional[Piece]],
-        put_work: Callable[[Piece], None],
-        put_result: Callable[[Piece, bytes], None],
+        get_work: Callable[['Peer', Bitfield], Optional[Piece]],
+        put_work: Callable[['Peer', Piece], None],
+        put_result: Callable[['Peer', Piece, bytes], None],
         has_finished: Callable[[], bool],
         info_hash: bytes,
         peer_id: bytes,
@@ -117,30 +133,33 @@ class Peer:
         self.chunk_size = chunk_size
         self.max_batch_requests = max_batch_requests
         self.bitfield = Bitfield()
+        self.cancelable = Cancelable()
         self.choked = True
-        self.cancel = False
 
 
     def start(self):
+        if self.has_finished():
+            return
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(10)
+        self.sock.settimeout(5)
         if not self._connect_and_handshake():
             self.sock.close()
             return
 
         self.sock.settimeout(30)
         while not self.has_finished():
-            work = self.get_work(self.bitfield)
+            work = self.get_work(self, self.bitfield)
             if not work:
                 logging.info('No work in queue')
-                time.sleep(10)
+                time.sleep(5)
                 continue
 
             try:
                 self._download(work)
             except socket.error as e:
                 logging.error('Socket error: %s', e)
-                self.put_work(work)
+                self.put_work(self, work)
                 break
 
         logging.debug('Shutdown peer...')
@@ -148,7 +167,7 @@ class Peer:
 
 
     def cancel_work(self):
-        self.cancel = True
+        self.cancelable.cancel = True
 
 
     def _connect_and_handshake(self) -> bool:
@@ -169,7 +188,7 @@ class Peer:
         handshake = header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id)
         logging.debug('Sent handshake: %s', header + struct.pack('!Q20s20s', 0, self.info_hash, self.peer_id))
         PeerMessage.write_bytes(self.sock, handshake)
-        data = PeerMessage.read_bytes(self.sock, len(header) + 48)
+        data = PeerMessage.read_bytes(self.sock, len(header) + 48, self.cancelable)
         if not data:
             return False
 
@@ -186,13 +205,14 @@ class Peer:
         downloaded_bytes = 0
         should_request_chunks = True
         requests_received = 0
+        self.cancelable.cancel = False
 
         logging.debug('Start download...')
         PeerMessage(PeerMessage.UNCHOKE).write(self.sock)
         PeerMessage(PeerMessage.INTERESTED).write(self.sock)
 
         while True:
-            message = PeerMessage.read(self.sock)
+            message = PeerMessage.read(self.sock, self.cancelable)
 
             if message.message_id == PeerMessage.KEEP_ALIVE:
                 time.sleep(3)
@@ -221,7 +241,7 @@ class Peer:
                 self.bitfield.value = bytearray(message.payload)
                 if not self.bitfield.has_piece(work.index):
                     logging.warning(f'Peer does not have data')
-                    self.put_work(work)
+                    self.put_work(self, work)
                     return
 
             elif message.message_id == PeerMessage.REQUEST:
@@ -242,19 +262,18 @@ class Peer:
 
                 if downloaded_bytes == work.size:
                     if self._sha1(downloaded_data) == work.sha1:
-                        self.put_result(work, downloaded_data)
+                        self.put_result(self, work, downloaded_data)
                         PeerMessage(PeerMessage.HAVE, work.index.to_bytes(4, 'big')).write(self.sock)
                         return
                     else:
                         logging.warning('Piece corrupted!')
-                        self.put_work(work)
+                        self.put_work(self, work)
                         return
 
             elif message.message_id == PeerMessage.CANCEL:
                 logging.debug('_CANCEL')
 
-            if self.cancel:
-                self.cancel = False
+            if self.cancelable.cancel:
                 return
 
             if should_request_chunks and not self.choked:

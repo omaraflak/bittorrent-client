@@ -37,6 +37,14 @@ class Client:
 
 
     def download(self, output_directory: str):
+        files_directory = os.path.join(output_directory, self.torrent.name)
+        self.tmp = os.path.join(files_directory, '.tmp')
+        os.makedirs(self.tmp, exist_ok=True)
+        self._read_downloaded_parts()
+        if self._has_finished():
+            self._write_files(files_directory)
+            return
+
         trackers = Trackers(
             self.torrent,
             self.peer_id,
@@ -45,30 +53,22 @@ class Client:
         )
         peers = trackers.get_peers()
 
-        files_directory = os.path.join(output_directory, self.torrent.name)
-        self.tmp = os.path.join(files_directory, '.tmp')
-        os.makedirs(self.tmp, exist_ok=True)
-        self._read_downloaded_parts()
-
         with ThreadPoolExecutor(max_workers=self.max_peer_workers) as executor:
-            executor.map(
-                Peer.start,
-                [
-                    Peer(
-                        peer,
-                        lambda bitfield: self._get_work(peer, bitfield),
-                        lambda work: self._put_work(peer, work),
-                        lambda piece, data: self._put_result(peer, piece, data),
-                        self._has_finished,
-                        self.torrent.info_hash,
-                        self.peer_id,
-                        self.torrent.piece_count,
-                        self.piece_chunk_size,
-                        self.max_peer_batch_requests
-                    )
-                    for peer in peers
-                ]
-            )
+            executor.map(Peer.start, [
+                Peer(
+                    peer,
+                    self._get_work,
+                    self._put_work,
+                    self._put_result,
+                    self._has_finished,
+                    self.torrent.info_hash,
+                    self.peer_id,
+                    self.torrent.piece_count,
+                    self.piece_chunk_size,
+                    self.max_peer_batch_requests
+                )
+                for peer in peers
+            ])
 
         if not self._has_finished():
             logging.error('Could not download file.')
@@ -118,18 +118,24 @@ class Client:
 
             for worker in self.workers_per_work[piece]:
                 if worker != peer:
-                    worker.cancel()
+                    worker.cancel_work()
 
             del self.workers_per_work[piece]
 
             self.work_done.add(piece)
+
+            if self._has_finished():
+                for workers in self.workers_per_work.values():
+                    for worker in workers:
+                        worker.cancel_work()
+
             percent = int(100 * len(self.work_done) / self.torrent.piece_count)
             human = Client._human_friendly_bytes_str(len(self.work_done) * self.torrent.piece_size)
             logging.info(f'Progress: {len(self.work_done)}/{self.torrent.piece_count} ({percent}%) {human}')
-        
-        filepath = os.path.join(self.tmp, piece.sha1.hex())
-        with open(filepath, 'wb') as file:
-            file.write(data)
+
+            filepath = os.path.join(self.tmp, piece.sha1.hex())
+            with open(filepath, 'wb') as file:
+                file.write(data)
 
 
     def _has_finished(self) -> bool:
