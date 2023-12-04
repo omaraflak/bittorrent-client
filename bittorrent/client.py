@@ -42,7 +42,7 @@ class Client:
         os.makedirs(self.tmp, exist_ok=True)
         self._read_downloaded_parts()
         if self._has_finished():
-            self._write_files(files_directory)
+            self._assemble_files(files_directory)
             return
 
         trackers = Trackers(
@@ -74,7 +74,7 @@ class Client:
             logging.error('Could not download file.')
             return
 
-        self._write_files(files_directory)
+        self._assemble_files(files_directory)
 
 
     def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
@@ -151,7 +151,7 @@ class Client:
                 self.work_queue.add(piece)
 
 
-    def _write_files(self, output_directory: str):
+    def _assemble_files(self, output_directory: str):
         for file in self.torrent.files:
             file_directoy = os.path.join(output_directory, *file.path[:-1])
             os.makedirs(file_directoy, exist_ok=True)
