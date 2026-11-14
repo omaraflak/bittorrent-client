@@ -1,11 +1,11 @@
 # BitTorrent Client
 
-A lightweight, robust BitTorrent client built with pure Python standard library (zero external dependencies).
+A lightweight and fast BitTorrent client.
 
 ## Installation
 
 ```bash
-pip install bittorrent_client
+pip install bittorrent-client
 ```
 
 ## CLI Usage
