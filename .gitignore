@@ -3,3 +3,6 @@ __pycache__
 .venv
 .DS_Store
 file.torrent
+build/
+dist/
+*.egg-info/
