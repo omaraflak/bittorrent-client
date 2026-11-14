@@ -2,26 +2,24 @@ import os
 import shutil
 import random
 import logging
-import hashlib
-from threading import Lock
-from typing import Optional
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from bittorrent.trackers import Trackers
-from bittorrent.torrent import Torrent, Piece, File
-from bittorrent.peer import Peer, Bitfield
+from bittorrent.torrent import Torrent, File
+from bittorrent.peer import AsyncPeer
+from bittorrent.storage import Storage
+from bittorrent.piece_manager import PieceManager
 
 
 class Client:
     """
     BitTorrent client responsible for coordinating peer discovery, concurrent
-    piece downloading, piece verification, and final file assembly.
+    piece downloading, piece verification, and direct-to-disk file writing.
     """
 
     def __init__(
         self,
         torrent: Torrent,
-        max_peer_workers: int = 40,
+        max_peer_workers: int = 60,
         max_tracker_workers: int = 20,
         max_peers_per_tracker: int = 200,
         max_peers_per_piece: int = 2,
@@ -32,11 +30,11 @@ class Client:
         Initialize a BitTorrent client instance.
 
         :param torrent: Parsed Torrent metadata object containing file and tracker details.
-        :param max_peer_workers: Maximum number of concurrent peer connection threads (default: 40).
+        :param max_peer_workers: Maximum number of concurrent peer connection workers (default: 60).
         :param max_tracker_workers: Maximum number of concurrent tracker query threads (default: 20).
         :param max_peers_per_tracker: Maximum number of peers to request per tracker announce (default: 200).
         :param max_peers_per_piece: Maximum number of concurrent workers allowed per piece during endgame mode (default: 2).
-        :param max_peer_batch_requests: Pipeline depth for concurrent in-flight chunk requests per peer (default: 16).
+        :param max_peer_batch_requests: Initial pipeline depth for concurrent in-flight chunk requests per peer (default: 16).
         :param piece_chunk_size: Size in bytes of each chunk requested from a peer (default: 16384 / 16 KiB).
         """
         self.torrent = torrent
@@ -48,11 +46,6 @@ class Client:
         self.piece_chunk_size = piece_chunk_size
 
         self.peer_id = b'-AG0001-' + random.randbytes(12)
-        self.work_queue: set[Piece] = set()
-        self.work_done: set[Piece] = set()
-        self.workers_per_work: dict[Piece, list[Peer]] = defaultdict(list)
-        self.active_peers: list[Peer] = []
-        self.lock = Lock()
         self.stopped = False
         self.tmp = ''
 
@@ -61,35 +54,42 @@ class Client:
         Download all pieces of the torrent into the target directory.
 
         Discovers peers from configured trackers (both UDP and HTTP/HTTPS), connects
-        to peers concurrently, downloads and validates piece chunks against their SHA-1
-        hashes, and assembles the verified pieces into target files on disk. Resumes
-        from partially downloaded pieces if available in the temporary cache directory.
+        to peers concurrently with adaptive pipelining, schedules chunks using
+        block-level sharing and Rarest-First, and writes verified piece data directly
+        to target files on disk. Resumes from existing verified files without overhead.
 
         :param output_directory: File system directory path where downloaded files will be saved.
         """
         if self.torrent.size == 0 or self.torrent.piece_count == 0:
             logging.info('Empty torrent, creating empty files.')
-            self._assemble_files(output_directory)
+            Storage(self.torrent, output_directory)
             return
 
-        # Setup temporary piece directory
-        if self.torrent.is_multi_file:
-            files_directory = os.path.join(output_directory, self.torrent.name)
-        else:
-            files_directory = output_directory
-        os.makedirs(files_directory, exist_ok=True)
+        try:
+            asyncio.run(self._async_download(output_directory))
+        except KeyboardInterrupt:
+            logging.warning('Download interrupted by user.')
 
-        self.tmp = os.path.join(
-            files_directory, f'.tmp_{self.torrent.info_hash[:8].hex()}')
-        os.makedirs(self.tmp, exist_ok=True)
+    async def _async_download(self, output_directory: str):
+        # 1. Direct-to-Disk Storage (pre-allocates sparse files, eliminates .tmp copy)
+        storage = Storage(self.torrent, output_directory)
 
-        # Check existing downloaded pieces for resuming
-        self._read_downloaded_parts()
-        if self._has_finished():
-            logging.info('All pieces already downloaded.')
-            self._assemble_files(output_directory)
+        # 2. Check for already completed pieces on disk (instant resume)
+        piece_manager = PieceManager(self.torrent, storage)
+        verified = storage.verify_existing_pieces()
+        for p_idx in verified:
+            piece_manager.mark_piece_completed(p_idx)
+
+        if piece_manager.is_finished():
+            logging.info(
+                'All pieces are already downloaded and verified on disk.')
             return
 
+        if verified:
+            logging.info(
+                f'Resuming download: {len(verified)}/{len(self.torrent.pieces)} pieces already verified on disk.')
+
+        # 3. Discover peers from trackers
         trackers = Trackers(
             self.torrent,
             self.peer_id,
@@ -102,165 +102,62 @@ class Client:
             return
 
         logging.info(
-            f'Starting download with {len(peers)} discovered peers...')
+            f'Starting high-speed async download with {len(peers)} discovered peers...')
 
-        peer_instances = [
-            Peer(
-                peer_endpoint,
-                self._get_work,
-                self._put_work,
-                self._put_result,
-                self._has_finished,
+        # 4. Spawn AsyncPeers with adaptive pipelining and block-level scheduling
+        peer_tasks = []
+        peers_to_connect = list(peers)[:self.max_peer_workers]
+        for endpoint in peers_to_connect:
+            ap = AsyncPeer(
+                endpoint,
                 self.torrent.info_hash,
                 self.peer_id,
-                self.torrent.piece_count,
-                self.piece_chunk_size,
-                self.max_peer_batch_requests
+                piece_manager,
+                initial_pipeline=self.max_peer_batch_requests,
+                max_pipeline=64,
+                min_pipeline=4
             )
-            for peer_endpoint in peers
-        ]
-        with self.lock:
-            self.active_peers = list(peer_instances)
+            peer_tasks.append(asyncio.create_task(ap.run()))
+
+        # 5. Monitor download progress
+        total_pieces = len(self.torrent.pieces)
+        last_logged_count = len(piece_manager.completed_pieces)
 
         try:
-            with ThreadPoolExecutor(max_workers=min(self.max_peer_workers, len(peers))) as executor:
-                futures = [executor.submit(p.start) for p in peer_instances]
-                # Wait for completion or all futures to end
-                for f in futures:
-                    try:
-                        f.result()
-                    except Exception as e:
-                        logging.debug(f'Peer future exited: {e}')
-        except KeyboardInterrupt:
-            logging.warning('Download interrupted by user.')
-            self._stop()
-            raise
-        finally:
-            self._stop()
+            while not piece_manager.is_finished():
+                if all(t.done() for t in peer_tasks):
+                    break
 
-        if not self._has_finished():
+                await asyncio.sleep(1.0)
+                current_count = len(piece_manager.completed_pieces)
+                if current_count != last_logged_count:
+                    last_logged_count = current_count
+                    percent = int(100 * current_count /
+                                  total_pieces) if total_pieces > 0 else 100
+                    downloaded_bytes = sum(
+                        self.torrent.pieces[i].size for i in piece_manager.completed_pieces)
+                    human_done = self._human_friendly_bytes_str(
+                        downloaded_bytes)
+                    human_total = self._human_friendly_bytes_str(
+                        self.torrent.size)
+                    logging.info(
+                        f'Progress: {current_count}/{total_pieces} pieces ({percent}%) [{human_done} / {human_total}]')
+
+        finally:
+            # Clean up all peer tasks
+            for t in peer_tasks:
+                t.cancel()
+            await asyncio.gather(*peer_tasks, return_exceptions=True)
+
+        if not piece_manager.is_finished():
             logging.error('Download did not finish completely.')
             return
 
-        self._assemble_files(output_directory)
-
-    def _stop(self):
-        with self.lock:
-            self.stopped = True
-            for p in self.active_peers:
-                p.cancel_work()
-
-    def _get_work(self, peer: Peer, bitfield: Bitfield) -> Optional[Piece]:
-        with self.lock:
-            if self.stopped or self._has_finished():
-                return None
-
-            # Primary: Pieces not yet assigned to any worker that this peer has
-            candidates = [
-                work
-                for work in self.work_queue
-                if (bitfield.size == 0 or bitfield.has_piece(work.index))
-            ]
-
-            if candidates:
-                work = random.choice(candidates)
-                self.work_queue.remove(work)
-                self.workers_per_work[work].append(peer)
-                return work
-
-            # Endgame: Duplicate remaining in-progress pieces, ensuring peer has it
-            endgame_candidates = [
-                work
-                for work, workers in self.workers_per_work.items()
-                if work not in self.work_done
-                and peer not in workers
-                and len(workers) < self.max_peers_per_piece
-                and (bitfield.size == 0 or bitfield.has_piece(work.index))
-            ]
-
-            if endgame_candidates:
-                work = random.choice(endgame_candidates)
-                self.workers_per_work[work].append(peer)
-                return work
-
-            return None
-
-    def _put_work(self, peer: Peer, work: Piece):
-        with self.lock:
-            if work in self.workers_per_work and peer in self.workers_per_work[work]:
-                self.workers_per_work[work].remove(peer)
-
-            # Re-queue piece only if it hasn't been completed and no other peer is on it
-            if work not in self.work_done and len(self.workers_per_work[work]) == 0:
-                self.work_queue.add(work)
-
-    def _put_result(self, peer: Peer, piece: Piece, data: bytes):
-        with self.lock:
-            if piece in self.work_done:
-                return
-
-            if piece in self.work_queue:
-                self.work_queue.remove(piece)
-
-            # Cancel any other workers on this piece
-            for worker in self.workers_per_work.get(piece, []):
-                if worker != peer:
-                    worker.cancel_work()
-
-            if piece in self.workers_per_work:
-                del self.workers_per_work[piece]
-
-            self.work_done.add(piece)
-
-            # Save piece part to disk
-            part_path = os.path.join(self.tmp, f'piece_{piece.index}.part')
-            with open(part_path, 'wb') as f:
-                f.write(data)
-
-            # Check if all pieces finished
-            if self._has_finished():
-                for workers in self.workers_per_work.values():
-                    for worker in workers:
-                        worker.cancel_work()
-
-            done_count = len(self.work_done)
-            total_count = self.torrent.piece_count
-            percent = int(100 * done_count /
-                          total_count) if total_count > 0 else 100
-            downloaded_bytes = sum(p.size for p in self.work_done)
-            human_done = Client._human_friendly_bytes_str(downloaded_bytes)
-            human_total = Client._human_friendly_bytes_str(self.torrent.size)
-
-            logging.info(
-                f'Progress: {done_count}/{total_count} pieces ({percent}%) [{human_done} / {human_total}]')
-
-    def _has_finished(self) -> bool:
-        return len(self.work_done) >= self.torrent.piece_count
-
-    def _read_downloaded_parts(self):
-        for piece in self.torrent.pieces:
-            part_path = os.path.join(self.tmp, f'piece_{piece.index}.part')
-            if os.path.isfile(part_path):
-                # Verify size and hash before trusting existing part
-                try:
-                    if os.path.getsize(part_path) == piece.size:
-                        with open(part_path, 'rb') as f:
-                            data = f.read()
-                        if hashlib.sha1(data).digest() == piece.sha1:
-                            self.work_done.add(piece)
-                            continue
-                except Exception:
-                    pass
-                # Corrupted part file, remove it
-                try:
-                    os.remove(part_path)
-                except Exception:
-                    pass
-            self.work_queue.add(piece)
+        logging.info(
+            'Download complete! All pieces verified directly on disk.')
 
     def _assemble_files(self, output_directory: str):
-        logging.info('Assembling downloaded pieces into destination files...')
-
+        """Assembles downloaded pieces from .tmp if present (backward compatibility)."""
         if self.torrent.is_multi_file:
             base_dir = os.path.join(output_directory, self.torrent.name)
             for file_info in self.torrent.files:
@@ -276,19 +173,14 @@ class Client:
                     output_directory, file_info.path[-1])
                 self._assemble_file(file_info, target_path)
 
-        logging.info('All files written to disk successfully!')
-
-        # Clean up temporary part files
         if self.tmp and os.path.isdir(self.tmp):
             try:
                 shutil.rmtree(self.tmp)
-                logging.debug('Temporary directory cleaned up.')
-            except Exception as e:
-                logging.debug(f'Failed to remove temporary directory: {e}')
+            except Exception:
+                pass
 
     def _assemble_file(self, file_info: File, output_path: str):
-        logging.info(
-            f'Assembling {os.path.basename(output_path)} ({Client._human_friendly_bytes_str(file_info.size)})...')
+        """Assembles a single file from .tmp part files (backward compatibility)."""
         if file_info.size == 0:
             with open(output_path, 'wb'):
                 pass
@@ -313,10 +205,11 @@ class Client:
                 if overlap_end > overlap_start:
                     part_path = os.path.join(
                         self.tmp, f'piece_{piece.index}.part')
-                    with open(part_path, 'rb') as part_file:
-                        part_file.seek(overlap_start - piece_start)
-                        data = part_file.read(overlap_end - overlap_start)
-                        dest.write(data)
+                    if os.path.exists(part_path):
+                        with open(part_path, 'rb') as part_file:
+                            part_file.seek(overlap_start - piece_start)
+                            data = part_file.read(overlap_end - overlap_start)
+                            dest.write(data)
 
     @staticmethod
     def _human_friendly_bytes_str(size: int) -> str:
