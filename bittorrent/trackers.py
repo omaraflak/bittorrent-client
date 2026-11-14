@@ -2,11 +2,14 @@ import socket
 import struct
 import random
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import urlencode, quote_from_bytes
+import urllib.request
 from dataclasses import dataclass
 from bittorrent.ip import IpAndPort
 from bittorrent.torrent import Torrent
+from bittorrent.bencode import decode_bencode
 
 
 @dataclass
@@ -17,10 +20,6 @@ class _ConnectRequest:
     transaction_id: int
 
     def to_bytes(self) -> bytes:
-        # Offset  Size            Name            Value
-        # 0       64-bit integer  protocol_id     0x41727101980 // magic constant
-        # 8       32-bit integer  action          0 // connect
-        # 12      32-bit integer  transaction_id
         return struct.pack(
             '!QII',
             _ConnectRequest._PROTOCOL_ID,
@@ -34,59 +33,39 @@ class _ConnectResponse:
     transaction_id: int
     connection_id: int
 
-
     @classmethod
-    def from_bytes(cls, data: bytes) -> '_ConnectResponse':
-        # Offset  Size            Name            Value
-        # 0       32-bit integer  action          0 // connect
-        # 4       32-bit integer  transaction_id
-        # 8       64-bit integer  connection_id
-        action, transaction_id, connection_id = struct.unpack('!IIQ', data)
-        assert action == _ConnectRequest._ACTION
+    def from_bytes(cls, data: bytes) -> Optional['_ConnectResponse']:
+        if len(data) < 16:
+            return None
+        action, transaction_id, connection_id = struct.unpack_from(
+            '!IIQ', data, 0)
+        if action != _ConnectRequest._ACTION:
+            return None
         return _ConnectResponse(transaction_id, connection_id)
-
-
-    @staticmethod
-    def size() -> int:
-        return 16
 
 
 @dataclass
 class _AnnounceRequest:
     _ACTION = 1
+    EVENT_NONE = 0
     EVENT_COMPLETE = 1
     EVENT_START = 2
     EVENT_STOP = 3
 
     connection_id: int
     transaction_id: int
-    info_hash: int
+    info_hash: bytes
     peer_id: bytes
-    downloaded: bytes
-    left: int
-    event: int = 0
+    downloaded: int = 0
+    left: int = 0
     uploaded: int = 0
-    key: int = 0
-    num_want: int  = -1
+    event: int = 0
     ip_address: int = 0
-    port: int = 0
-
+    key: int = 0
+    num_want: int = -1
+    port: int = 6881
 
     def to_bytes(self) -> bytes:
-        # Offset  Size    Name    Value
-        # 0       64-bit integer  connection_id
-        # 8       32-bit integer  action          1 // announce
-        # 12      32-bit integer  transaction_id
-        # 16      20-byte string  info_hash
-        # 36      20-byte string  peer_id
-        # 56      64-bit integer  downloaded
-        # 64      64-bit integer  left
-        # 72      64-bit integer  uploaded
-        # 80      32-bit integer  event           0 // 0: none; 1: completed; 2: started; 3: stopped
-        # 84      32-bit integer  IP address      0 // default
-        # 88      32-bit integer  key
-        # 92      32-bit integer  num_want        -1 // default
-        # 96      16-bit integer  port
         return struct.pack(
             '!QII20s20sQQQIIIiH',
             self.connection_id,
@@ -113,48 +92,45 @@ class _AnnounceResponse:
     seeders: int
     peers: list[IpAndPort]
 
-
     @classmethod
-    def from_bytes(cls, data: bytes) -> '_AnnounceResponse':
-        # Offset      Size            Name            Value
-        # 0           32-bit integer  action          1 // announce
-        # 4           32-bit integer  transaction_id
-        # 8           32-bit integer  interval
-        # 12          32-bit integer  leechers
-        # 16          32-bit integer  seeders
-        # 20 + 6 * n  32-bit integer  IP address
-        # 24 + 6 * n  16-bit integer  TCP port
-        if len(data) < 20 or (len(data) - 20) % 6 != 0:
-            return _AnnounceResponse(0, 0, 0, 0, [])
+    def from_bytes(cls, data: bytes) -> Optional['_AnnounceResponse']:
+        if len(data) < 20:
+            return None
 
-        peers_count = (len(data) - 20) // 6
-        (
-            action,
-            transaction_id,
-            interval,
-            leechers,
-            seeders,
-            *ips_and_ports
-        ) = struct.unpack('!IIIII' + peers_count * 'IH', data)
-        assert action == _AnnounceRequest._ACTION
-        peers = [
-            IpAndPort(
-                _AnnounceResponse._parse_ip(ips_and_ports[i]),
-                ips_and_ports[i + 1]
-            )
-            for i in range(0, len(ips_and_ports), 2)
-        ]
+        action, transaction_id = struct.unpack_from('!II', data, 0)
+        if action == 3:  # Error response in BEP 15
+            error_message = data[8:].decode('utf-8', errors='replace')
+            logging.debug(f'Tracker returned error: {error_message}')
+            return None
+
+        if action != _AnnounceRequest._ACTION:
+            return None
+
+        peers_bytes_len = len(data) - 20
+        if peers_bytes_len % 6 != 0:
+            peers_bytes_len -= peers_bytes_len % 6
+
+        peers_count = peers_bytes_len // 6
+        unpack_format = '!IIIII' + (peers_count * 'IH')
+        unpacked = struct.unpack_from(unpack_format, data, 0)
+
+        action = unpacked[0]
+        transaction_id = unpacked[1]
+        interval = unpacked[2]
+        leechers = unpacked[3]
+        seeders = unpacked[4]
+        ips_and_ports = unpacked[5:]
+
+        peers: list[IpAndPort] = []
+        for i in range(0, len(ips_and_ports), 2):
+            raw_ip = ips_and_ports[i]
+            port = ips_and_ports[i + 1]
+            if port != 0:
+                ip_str = socket.inet_ntoa(struct.pack('!I', raw_ip))
+                if ip_str != '0.0.0.0':
+                    peers.append(IpAndPort(ip_str, port))
+
         return _AnnounceResponse(transaction_id, interval, leechers, seeders, peers)
-
-
-    @staticmethod
-    def _parse_ip(ip: int) -> str:
-        return socket.inet_ntoa(struct.pack('!L', ip))
-
-
-    @staticmethod
-    def size(peers: int) -> int:
-        return 20 + 6 * peers
 
 
 class Trackers:
@@ -162,80 +138,181 @@ class Trackers:
         self,
         torrent: Torrent,
         peer_id: bytes,
-        max_workers: int,
-        max_peers_per_tracker: int,
+        max_workers: int = 20,
+        max_peers_per_tracker: int = 200,
     ):
         self.torrent = torrent
         self.peer_id = peer_id
         self.max_workers = max_workers
         self.max_peers_per_tracker = max_peers_per_tracker
 
-
     def get_peers(self) -> set[IpAndPort]:
+        peers: set[IpAndPort] = set()
+
+        # Gather UDP tracker endpoints
+        udp_trackers = self.torrent.trackers_by_protocol('udp')
+
+        # Gather HTTP/HTTPS tracker URLs
+        http_trackers = [
+            url for url in self.torrent.trackers
+            if url.startswith('http://') or url.startswith('https://')
+        ]
+
+        tasks = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            trackers = self.torrent.trackers_by_protocol('udp')
-            return {
-                peer
-                for peers in executor.map(self._get_peers_from_tracker, trackers)
-                for peer in peers
-            }
+            for tracker in udp_trackers:
+                tasks.append(executor.submit(
+                    self._get_peers_from_udp_tracker, tracker))
+            for url in http_trackers:
+                tasks.append(executor.submit(
+                    self._get_peers_from_http_tracker, url))
 
+            for future in as_completed(tasks):
+                try:
+                    res = future.result()
+                    if res:
+                        peers.update(res)
+                except Exception as e:
+                    logging.debug(f'Tracker query exception: {e}')
 
-    def _get_peers_from_tracker(self, tracker: IpAndPort) -> set[IpAndPort]:
-        response = self._announce(tracker, _AnnounceRequest.EVENT_START)
+        logging.info(f'Discovered {len(peers)} unique peers from trackers.')
+        return peers
+
+    def _get_peers_from_udp_tracker(self, tracker: IpAndPort) -> set[IpAndPort]:
+        response = self._announce_udp(tracker, _AnnounceRequest.EVENT_START)
         if not response:
-            logging.error(f'Failed to announce START to tracker {tracker.ip}:{tracker.port}')
-            return {}
+            return set()
+        return {p for p in response.peers if p.port != 0 and p.ip != '0.0.0.0'}
 
-        if not response:
-            return {}
+    def _announce_udp(self, tracker: IpAndPort, event: int) -> Optional[_AnnounceResponse]:
+        logging.debug(
+            f'Announcing to UDP tracker {tracker.ip}:{tracker.port}...')
 
-        if len(response.peers) == 0:
-            response = self._announce(tracker, _AnnounceRequest.EVENT_STOP)
-            if not response:
-                logging.error(f'Failed to announce STOP to tracker {tracker.ip}:{tracker.port}')
+        # Resolve hostname to IP first to avoid repeated DNS timeouts
+        try:
+            target_addr = (socket.gethostbyname(tracker.ip), tracker.port)
+        except (socket.gaierror, OSError) as e:
+            logging.debug(f'DNS resolution failed for {tracker.ip}: {e}')
+            return None
 
-        return {peer for peer in response.peers if peer.port != 0}
-
-
-    def _announce(self, tracker: IpAndPort, event: int) -> Optional[_AnnounceResponse]:
-        logging.debug(f'Announcing to {tracker.ip}:{tracker.port} ...')
-
-        transaction_id = int.from_bytes(random.randbytes(4), 'big')
-
-        # open socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(3)
+        sock.settimeout(2.5)
 
         try:
-            # connect
-            connect_request = _ConnectRequest(transaction_id)
-            sock.sendto(connect_request.to_bytes(), (tracker.ip, tracker.port))
-            connect_response = _ConnectResponse.from_bytes(sock.recv(_ConnectResponse.size()))
-            if transaction_id != connect_response.transaction_id:
-                logging.error('Tracker did not return the expected transaction id')
+            # Step 1: Connect Request with retry
+            connect_transaction_id = random.getrandbits(32)
+            connect_request = _ConnectRequest(connect_transaction_id)
+            connect_response: Optional[_ConnectResponse] = None
+
+            for _ in range(2):
+                try:
+                    sock.sendto(connect_request.to_bytes(), target_addr)
+                    raw_data = sock.recv(256)
+                    resp = _ConnectResponse.from_bytes(raw_data)
+                    if resp and resp.transaction_id == connect_transaction_id:
+                        connect_response = resp
+                        break
+                except (socket.timeout, OSError):
+                    continue
+
+            if not connect_response:
                 return None
 
-            # announce
+            # Step 2: Announce Request with retry (BEP 15 requires new transaction_id)
+            announce_transaction_id = random.getrandbits(32)
             announce_request = _AnnounceRequest(
-                connect_response.connection_id,
-                transaction_id,
-                self.torrent.info_hash,
-                self.peer_id,
-                0, # downloaded
-                self.torrent.size, # left
-                event
+                connection_id=connect_response.connection_id,
+                transaction_id=announce_transaction_id,
+                info_hash=self.torrent.info_hash,
+                peer_id=self.peer_id,
+                downloaded=0,
+                left=self.torrent.size,
+                uploaded=0,
+                event=event
             )
-            sock.sendto(announce_request.to_bytes(), (tracker.ip, tracker.port))
-            announce_response = _AnnounceResponse.from_bytes(sock.recv(_AnnounceResponse.size(self.max_peers_per_tracker)))
-            if transaction_id != announce_response.transaction_id:
-                logging.error('Tracker did not return the expected transaction id')
-                return None
 
-            logging.debug('Announced to tracker successfully!')
-            return announce_response
-        except socket.error as e:
-            logging.error('Announce failed: %s', e)
+            for _ in range(2):
+                try:
+                    sock.sendto(announce_request.to_bytes(), target_addr)
+                    # Maximum UDP tracker response size for ~200 peers is ~1220 bytes (fits MTU)
+                    raw_data = sock.recv(2048)
+                    announce_response = _AnnounceResponse.from_bytes(raw_data)
+                    if announce_response and announce_response.transaction_id == announce_transaction_id:
+                        logging.debug(
+                            f'Received {len(announce_response.peers)} peers from UDP {tracker.ip}:{tracker.port}')
+                        return announce_response
+                except (socket.timeout, OSError):
+                    continue
+
+            return None
+        except Exception as e:
+            logging.debug(
+                f'UDP announce error with {tracker.ip}:{tracker.port}: {e}')
             return None
         finally:
             sock.close()
+
+    def _get_peers_from_http_tracker(self, url: str) -> set[IpAndPort]:
+        logging.debug(f'Announcing to HTTP tracker {url}...')
+        try:
+            params = {
+                'info_hash': quote_from_bytes(self.torrent.info_hash),
+                'peer_id': quote_from_bytes(self.peer_id),
+                'port': 6881,
+                'uploaded': 0,
+                'downloaded': 0,
+                'left': self.torrent.size,
+                'compact': 1,
+                'event': 'started'
+            }
+            # urlencode with safe='%' so quote_from_bytes percent-encoded values aren't double escaped
+            delimiter = '&' if '?' in url else '?'
+            query_string = delimiter + \
+                '&'.join(f'{k}={v}' for k, v in params.items())
+            full_url = url + query_string
+
+            req = urllib.request.Request(
+                full_url,
+                headers={'User-Agent': 'BitTorrent/1.0.0'}
+            )
+
+            with urllib.request.urlopen(req, timeout=4) as response:
+                content = response.read()
+
+            decoded = decode_bencode(content)
+            if not isinstance(decoded, dict):
+                return set()
+
+            if 'failure reason' in decoded:
+                reason = decoded['failure reason']
+                logging.debug(f'HTTP tracker failure reason: {reason}')
+                return set()
+
+            peers_data = decoded.get('peers')
+            result_peers: set[IpAndPort] = set()
+
+            # Compact peers representation (BEP 23): 6 bytes per peer (4 bytes IP, 2 bytes port)
+            if isinstance(peers_data, bytes):
+                for i in range(0, len(peers_data) - 5, 6):
+                    ip_bytes = peers_data[i:i + 4]
+                    port = struct.unpack('!H', peers_data[i + 4:i + 6])[0]
+                    ip_str = socket.inet_ntoa(ip_bytes)
+                    if port != 0 and ip_str != '0.0.0.0':
+                        result_peers.add(IpAndPort(ip_str, port))
+            elif isinstance(peers_data, list):
+                # Dictionary model (BEP 3)
+                for p in peers_data:
+                    if isinstance(p, dict):
+                        ip = p.get('ip')
+                        if isinstance(ip, bytes):
+                            ip = ip.decode('utf-8', errors='replace')
+                        port = p.get('port')
+                        if ip and port and isinstance(port, int) and port != 0:
+                            result_peers.add(IpAndPort(str(ip), port))
+
+            logging.debug(
+                f'Received {len(result_peers)} peers from HTTP tracker {url}')
+            return result_peers
+        except Exception as e:
+            logging.debug(f'HTTP announce failed for {url}: {e}')
+            return set()
