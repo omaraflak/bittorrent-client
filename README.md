@@ -31,8 +31,7 @@ Options:
 
 ```python
 import logging
-from bittorrent.torrent import Torrent
-from bittorrent.client import Client
+from bittorrent import Torrent, Client
 
 logging.basicConfig(level=logging.INFO)
 
